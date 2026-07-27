@@ -1,7 +1,10 @@
 import os
+import sys
+import re
 import json
 import time
 import curses
+import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 import feedparser
@@ -9,6 +12,9 @@ import requests
 from readability import Document
 from bs4 import BeautifulSoup
 from ebooklib import epub
+
+VERSION = "1.0"
+RAW_UPDATE_URL = "https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/Feed2ebook.py"
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 FEEDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feeds.json")
@@ -67,6 +73,36 @@ def load_feeds():
 def save_feeds(feeds):
     with open(FEEDS_FILE, "w") as f:
         json.dump(feeds, f, indent=4)
+
+def check_for_updates():
+    """Checks GitHub repo for updates and offers to overwrite current file."""
+    print(f"\n[+] Current Version: v{VERSION}")
+    print("[+] Checking GitHub for updates...")
+    try:
+        req = urllib.request.Request(RAW_UPDATE_URL, headers={'User-Agent': HEADERS['User-Agent']})
+        with urllib.request.urlopen(req, timeout=10) as response:
+            remote_code = response.read().decode('utf-8')
+
+        match = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', remote_code)
+        if not match:
+            print("[-] Unable to parse remote version info.")
+            return
+
+        remote_version = match.group(1)
+        if remote_version != VERSION:
+            print(f"\n[!] New update available: v{remote_version}")
+            choice = input("Would you like to update now? (y/n): ").strip().lower()
+            if choice in ['y', 'yes']:
+                script_path = os.path.realpath(sys.argv[0])
+                with open(script_path, 'w', encoding='utf-8') as f:
+                    f.write(remote_code)
+                print("\n[+] Update successfully installed!")
+                print("[*] Restarting Feed2ebook...")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+        else:
+            print("[+] You are using the latest version!")
+    except Exception as e:
+        print(f"[-] Failed to check for updates: {e}")
 
 def import_opml(filepath):
     if not os.path.exists(filepath):
@@ -271,7 +307,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      # Exit / Delete
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  # OPML / Imports
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager ==="):
+def draw_tui_menu(stdscr, selected_row, options, title=f"=== Feed2ebook Manager v{VERSION} ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -312,6 +348,7 @@ def curses_tui_loop(stdscr):
             (f"Import OPML Subscriptions", 6),
             (f"Export OPML Subscriptions", 6),
             (f"Configure Settings (Format: {config['export_format'].upper()}, Days: {config['max_days']})", 4),
+            (f"Check for Script Updates (v{VERSION})", 3),
             ("Switch to Classic CLI Menu", 1),
             ("Exit Program", 5)
         ]
@@ -344,8 +381,10 @@ def curses_tui_loop(stdscr):
             elif current_row == 4:
                 settings_cli()
             elif current_row == 5:
-                return "cli"
+                check_for_updates()
             elif current_row == 6:
+                return "cli"
+            elif current_row == 7:
                 return "exit"
             
             input("\nPress Enter to return to Feed2ebook TUI...")
@@ -422,16 +461,17 @@ def settings_cli():
 def main_cli_menu():
     while True:
         config = load_config()
-        print("\n=== Feed2ebook Manager v1.0 ===")
+        print(f"\n=== Feed2ebook Manager v{VERSION} ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
         print("4. Export OPML File")
         print(f"5. Settings (Format: {config['export_format'].upper()}, Days limit: {config['max_days']})")
-        print("6. Launch TUI Graphical Menu")
-        print("7. Exit")
+        print("6. Check for Script Updates")
+        print("7. Launch TUI Graphical Menu")
+        print("8. Exit")
         
-        choice = input("Select an option (1-7): ").strip()
+        choice = input("Select an option (1-8): ").strip()
         
         if choice == "1":
             process_feeds()
@@ -444,10 +484,12 @@ def main_cli_menu():
         elif choice == "5":
             settings_cli()
         elif choice == "6":
+            check_for_updates()
+        elif choice == "7":
             res = curses.wrapper(curses_tui_loop)
             if res == "exit":
                 break
-        elif choice == "7":
+        elif choice == "8":
             break
 
 def main():
@@ -460,4 +502,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-                
+        
