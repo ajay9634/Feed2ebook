@@ -19,26 +19,35 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def ensure_directory_exists(path):
-    """Utility to safely create directory and fallback if Android permission is denied."""
+PRESET_PATHS = {
+    "1": ("/sdcard/Download/Feed2ebook_Articles", "Phone Downloads Folder (/sdcard/Download)"),
+    "2": (os.path.expanduser("~/storage/downloads/Feed2ebook_Articles"), "Termux Shared Downloads (~/storage/downloads)"),
+    "3": (os.path.expanduser("~/Feed2ebook_Articles"), "Termux Internal Storage (~/Feed2ebook_Articles)"),
+}
+
+def test_path_writable(path):
+    """Tests if a given path is writable on Android/Termux."""
     try:
         os.makedirs(path, exist_ok=True)
-        # Test write permission by creating a temporary file
         test_file = os.path.join(path, ".perm_test")
         with open(test_file, "w") as f:
             f.write("test")
         os.remove(test_file)
-        return path
+        return True, path
     except Exception as e:
-        print(f"[-] Warning: Cannot write to '{path}': {e}")
-        fallback = os.path.expanduser("~/Feed2ebook_Articles")
-        print(f"[!] Falling back to internal storage directory: '{fallback}'")
-        try:
-            os.makedirs(fallback, exist_ok=True)
-            return fallback
-        except Exception as fb_err:
-            print(f"[!] Critical Error: Could not create fallback directory: {fb_err}")
-            return path
+        return False, str(e)
+
+def ensure_directory_exists(path):
+    """Utility to safely create directory and fallback to internal if Android permission is denied."""
+    ok, err = test_path_writable(path)
+    if ok:
+        return path
+    
+    print(f"[-] Warning: Cannot write to '{path}': {err}")
+    fallback = os.path.expanduser("~/Feed2ebook_Articles")
+    print(f"[!] Falling back to internal storage directory: '{fallback}'")
+    test_path_writable(fallback)
+    return fallback
 
 def load_config():
     """Load configuration with default fallback."""
@@ -59,7 +68,6 @@ def load_config():
     if default_config["export_format"] not in ["epub", "xml", "all"]:
         default_config["export_format"] = "epub"
 
-    # Ensure storage target exists upon loading configuration
     default_config["download_path"] = ensure_directory_exists(default_config["download_path"])
     return default_config
 
@@ -67,6 +75,40 @@ def save_config(config):
     config["download_path"] = ensure_directory_exists(config["download_path"])
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=4)
+
+def choose_export_path_cli(config):
+    """Interactive path selection menu."""
+    print("\n=========================================")
+    print("      Choose Export Output Path          ")
+    print("=========================================")
+    print(f"Current Path: {config['download_path']}\n")
+    print("Available Presets:")
+    for key, (path, desc) in PRESET_PATHS.items():
+        writable, _ = test_path_writable(path)
+        status = "[Writable]" if writable else "[Access Denied/Not Setup]"
+        print(f"  {key}. {desc} {status}")
+        print(f"     Path: {path}")
+    print("  4. Enter Custom Path Manually")
+    
+    choice = input("\nSelect location option (1-4) or press Enter to keep current: ").strip()
+    
+    selected_path = None
+    if choice in PRESET_PATHS:
+        selected_path = PRESET_PATHS[choice][0]
+    elif choice == "4":
+        custom = input("Enter full custom directory path: ").strip()
+        if custom:
+            selected_path = custom
+
+    if selected_path:
+        writable, err = test_path_writable(selected_path)
+        if writable:
+            config["download_path"] = selected_path
+            save_config(config)
+            print(f"\n[+] Export path updated successfully to:\n    {selected_path}")
+        else:
+            print(f"\n[-] Error: Unable to write to '{selected_path}'. Permission denied.")
+            print("[-] If choosing phone downloads, run 'termux-setup-storage' in Termux first.")
 
 def load_feeds():
     if os.path.exists(FEEDS_FILE):
@@ -101,18 +143,11 @@ def run_diagnostics():
             all_libs_ok = False
 
     print(f"\n[2/4] Checking Output Storage Path: '{target_path}'...")
-    if not os.path.exists(target_path):
-        print("  [-] Path does not exist. Attempting creation...")
-        target_path = ensure_directory_exists(target_path)
-    
-    test_file_path = os.path.join(target_path, ".diag_write_test.tmp")
-    try:
-        with open(test_file_path, "w") as f:
-            f.write("test")
-        os.remove(test_file_path)
+    writable, err = test_path_writable(target_path)
+    if writable:
         print("  [+] Write Permission Test: PASSED")
-    except Exception as e:
-        print(f"  [-] Write Permission Test: FAILED ({e})")
+    else:
+        print(f"  [-] Write Permission Test: FAILED ({err})")
         print("  [!] FIX: Run 'termux-setup-storage' in Termux terminal and allow storage access.")
 
     print(f"\n[3/4] Testing EPUB Generator Engine...")
@@ -142,10 +177,10 @@ def run_diagnostics():
         print(f"  [!] Traceback: {traceback.format_exc()}")
 
     print(f"\n[4/4] Summary:")
-    if all_libs_ok:
-        print("[+] Environment and dependencies look ready!")
+    if all_libs_ok and writable:
+        print("[+] Environment and storage are fully configured and ready!")
     else:
-        print("[-] Some dependencies need fixing before generating EPUB files.")
+        print("[-] Issues found. Please resolve permissions or missing packages.")
     print("=========================================\n")
 
 def import_opml(filepath):
@@ -283,8 +318,6 @@ def build_epub(articles_data, output_dir, base_filename):
             print("[-] Error: EPUB file write command executed but file was not found on disk.")
     except Exception as e:
         print(f"[-] Failed to generate EPUB file: {e}")
-        print(f"[!] Running diagnostic check on environment...")
-        run_diagnostics()
 
 def process_feeds():
     config = load_config()
@@ -405,6 +438,7 @@ def curses_tui_loop(stdscr):
             (f"Manage Feeds ({len(feeds)} active)", 1),
             (f"Import OPML Subscriptions", 6),
             (f"Export OPML Subscriptions", 6),
+            (f"Select Export Directory Path", 4),
             (f"Configure Settings (Format: {config['export_format'].upper()}, Days: {config['max_days']})", 4),
             ("Run System Diagnostics & Health Check", 4),
             ("Switch to Classic CLI Menu", 1),
@@ -437,12 +471,14 @@ def curses_tui_loop(stdscr):
             elif current_row == 3:
                 export_opml_cli()
             elif current_row == 4:
-                settings_cli()
+                choose_export_path_cli(config)
             elif current_row == 5:
-                run_diagnostics()
+                settings_cli()
             elif current_row == 6:
-                return "cli"
+                run_diagnostics()
             elif current_row == 7:
+                return "cli"
+            elif current_row == 8:
                 return "exit"
             
             input("\nPress Enter to return to Feed2ebook TUI...")
@@ -497,24 +533,29 @@ def settings_cli():
     print(f"B. Max Articles Per Feed: {config['max_articles_per_feed']}")
     print(f"C. Export Format ('epub', 'xml', or 'all'): {config['export_format']}")
     print(f"D. Download Path: {config['download_path']}")
+    print(f"E. Choose Output Path (Presets Menu)")
     
-    field = input("Choose setting to modify (A/B/C/D) or press Enter to return: ").strip().upper()
+    field = input("Choose setting to modify (A/B/C/D/E) or press Enter to return: ").strip().upper()
     if field == "A":
         config["max_days"] = int(input("Enter max days: ").strip())
+        save_config(config)
     elif field == "B":
         config["max_articles_per_feed"] = int(input("Enter max articles per feed: ").strip())
+        save_config(config)
     elif field == "C":
         fmt = input("Enter format ('epub', 'xml', 'all'): ").strip().lower()
         if fmt in ["epub", "xml", "all"]:
             config["export_format"] = fmt
+            save_config(config)
         else:
             print("[-] Invalid format option.")
     elif field == "D":
         new_path = input("Enter new path: ").strip()
         if new_path:
             config["download_path"] = new_path
-    save_config(config)
-    print("[+] Settings updated successfully!")
+            save_config(config)
+    elif field == "E":
+        choose_export_path_cli(config)
 
 def main_cli_menu():
     while True:
@@ -524,12 +565,13 @@ def main_cli_menu():
         print(f"2. Manage Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
         print("4. Export OPML File")
-        print(f"5. Settings (Format: {config['export_format'].upper()}, Days limit: {config['max_days']})")
-        print("6. Run System Diagnostics & Health Check")
-        print("7. Launch TUI Graphical Menu")
-        print("8. Exit")
+        print("5. Choose Export Path Location")
+        print(f"6. Settings (Format: {config['export_format'].upper()}, Days limit: {config['max_days']})")
+        print("7. Run System Diagnostics & Health Check")
+        print("8. Launch TUI Graphical Menu")
+        print("9. Exit")
         
-        choice = input("Select an option (1-8): ").strip()
+        choice = input("Select an option (1-9): ").strip()
         
         if choice == "1":
             process_feeds()
@@ -540,14 +582,16 @@ def main_cli_menu():
         elif choice == "4":
             export_opml_cli()
         elif choice == "5":
-            settings_cli()
+            choose_export_path_cli(config)
         elif choice == "6":
-            run_diagnostics()
+            settings_cli()
         elif choice == "7":
+            run_diagnostics()
+        elif choice == "8":
             res = curses.wrapper(curses_tui_loop)
             if res == "exit":
                 break
-        elif choice == "8":
+        elif choice == "9":
             break
 
 def main():
