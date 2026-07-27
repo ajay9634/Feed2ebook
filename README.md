@@ -21,7 +21,7 @@ Note: Run `termux-setup-storage` first in Termux to allow saving to your Downloa
 After installation, launch the app anytime by typing: `feed2ebook`
 
 
-For **Termux** , run this install command: 
+For **Termux** , run this command to install or update : 
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh | bash
