@@ -23,4 +23,4 @@ Launch the app anytime by typing: `feed2ebook`
 For **Termux** or **Linux**, run this single command:
 
 ```bash
-curl -sSL [https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh](https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh) | bash
+curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh | bash
