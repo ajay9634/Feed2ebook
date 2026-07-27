@@ -16,7 +16,10 @@
 
 ## ⚡ One-Line Automatic Installer
 
-For **Termux** or **Linux**, run this single command to automatically install system packages, Python libraries, download `feed2ebook.py`, and set up the `feed2ebook` command shortcut:
+For **Termux** or **Linux**, run this single command:
 
-```bash
-curl -sSL [https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh](https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh) | bash
+curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh | bash
+
+Note: Run termux-setup-storage first on Termux to allow saving to your Download folder.
+
+Launch the app anytime by typing: feed2ebook
