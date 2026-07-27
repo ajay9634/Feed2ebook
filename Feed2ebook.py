@@ -1,10 +1,9 @@
 import os
 import sys
-import re
 import json
 import time
 import curses
-import urllib.request
+import traceback
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 import feedparser
@@ -12,9 +11,6 @@ import requests
 from readability import Document
 from bs4 import BeautifulSoup
 from ebooklib import epub
-
-VERSION = "1.0"
-RAW_UPDATE_URL = "https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/Feed2ebook.py"
 
 CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 FEEDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feeds.json")
@@ -24,14 +20,28 @@ HEADERS = {
 }
 
 def ensure_directory_exists(path):
-    """Utility to safely create directory if it doesn't exist."""
+    """Utility to safely create directory and fallback if Android permission is denied."""
     try:
         os.makedirs(path, exist_ok=True)
+        # Test write permission by creating a temporary file
+        test_file = os.path.join(path, ".perm_test")
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return path
     except Exception as e:
-        print(f"[-] Warning: Could not create folder {path}: {e}")
+        print(f"[-] Warning: Cannot write to '{path}': {e}")
+        fallback = os.path.expanduser("~/Feed2ebook_Articles")
+        print(f"[!] Falling back to internal storage directory: '{fallback}'")
+        try:
+            os.makedirs(fallback, exist_ok=True)
+            return fallback
+        except Exception as fb_err:
+            print(f"[!] Critical Error: Could not create fallback directory: {fb_err}")
+            return path
 
 def load_config():
-    """Load configuration with default fallback and ensure target directory exists."""
+    """Load configuration with default fallback."""
     default_config = {
         "download_path": "/sdcard/Download/Feed2ebook_Articles",
         "max_days": 7,
@@ -46,18 +56,15 @@ def load_config():
         except Exception:
             pass
 
-    # Fallback to epub if an invalid format was previously saved
     if default_config["export_format"] not in ["epub", "xml", "all"]:
         default_config["export_format"] = "epub"
 
-    # Create target download folder immediately on setup/load
-    ensure_directory_exists(default_config["download_path"])
-
+    # Ensure storage target exists upon loading configuration
+    default_config["download_path"] = ensure_directory_exists(default_config["download_path"])
     return default_config
 
 def save_config(config):
-    # Ensure folder exists when saving modified configuration
-    ensure_directory_exists(config["download_path"])
+    config["download_path"] = ensure_directory_exists(config["download_path"])
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=4)
 
@@ -74,35 +81,72 @@ def save_feeds(feeds):
     with open(FEEDS_FILE, "w") as f:
         json.dump(feeds, f, indent=4)
 
-def check_for_updates():
-    """Checks GitHub repo for updates and offers to overwrite current file."""
-    print(f"\n[+] Current Version: v{VERSION}")
-    print("[+] Checking GitHub for updates...")
+def run_diagnostics():
+    """Auto-checks environment, write permissions, and tests EPUB export."""
+    print("\n=========================================")
+    print("   Feed2ebook System Diagnostics Check   ")
+    print("=========================================")
+    config = load_config()
+    target_path = config["download_path"]
+
+    print(f"\n[1/4] Checking Python Libraries...")
+    libs = ["requests", "bs4", "feedparser", "readability", "ebooklib"]
+    all_libs_ok = True
+    for lib in libs:
+        try:
+            __import__(lib)
+            print(f"  [+] {lib}: Installed")
+        except ImportError:
+            print(f"  [-] {lib}: MISSING! (Install using: pip install {lib})")
+            all_libs_ok = False
+
+    print(f"\n[2/4] Checking Output Storage Path: '{target_path}'...")
+    if not os.path.exists(target_path):
+        print("  [-] Path does not exist. Attempting creation...")
+        target_path = ensure_directory_exists(target_path)
+    
+    test_file_path = os.path.join(target_path, ".diag_write_test.tmp")
     try:
-        req = urllib.request.Request(RAW_UPDATE_URL, headers={'User-Agent': HEADERS['User-Agent']})
-        with urllib.request.urlopen(req, timeout=10) as response:
-            remote_code = response.read().decode('utf-8')
-
-        match = re.search(r'VERSION\s*=\s*["\']([^"\']+)["\']', remote_code)
-        if not match:
-            print("[-] Unable to parse remote version info.")
-            return
-
-        remote_version = match.group(1)
-        if remote_version != VERSION:
-            print(f"\n[!] New update available: v{remote_version}")
-            choice = input("Would you like to update now? (y/n): ").strip().lower()
-            if choice in ['y', 'yes']:
-                script_path = os.path.realpath(sys.argv[0])
-                with open(script_path, 'w', encoding='utf-8') as f:
-                    f.write(remote_code)
-                print("\n[+] Update successfully installed!")
-                print("[*] Restarting Feed2ebook...")
-                os.execv(sys.executable, [sys.executable] + sys.argv)
-        else:
-            print("[+] You are using the latest version!")
+        with open(test_file_path, "w") as f:
+            f.write("test")
+        os.remove(test_file_path)
+        print("  [+] Write Permission Test: PASSED")
     except Exception as e:
-        print(f"[-] Failed to check for updates: {e}")
+        print(f"  [-] Write Permission Test: FAILED ({e})")
+        print("  [!] FIX: Run 'termux-setup-storage' in Termux terminal and allow storage access.")
+
+    print(f"\n[3/4] Testing EPUB Generator Engine...")
+    try:
+        dummy_book = epub.EpubBook()
+        dummy_book.set_identifier("diag_123")
+        dummy_book.set_title("Test Document")
+        dummy_book.set_language("en")
+        
+        chap = epub.EpubHtml(title="Test", file_name="test.xhtml", lang="en")
+        chap.content = "<html><body><h1>Diagnostic Test</h1></body></html>"
+        dummy_book.add_item(chap)
+        dummy_book.toc = (chap,)
+        dummy_book.add_item(epub.EpubNcx())
+        dummy_book.add_item(epub.EpubNav())
+        dummy_book.spine = ['nav', chap]
+
+        diag_epub_path = os.path.join(target_path, "_diagnostic_test.epub")
+        epub.write_epub(diag_epub_path, dummy_book, {})
+        if os.path.exists(diag_epub_path):
+            os.remove(diag_epub_path)
+            print("  [+] EPUB Creation Test: PASSED")
+        else:
+            print("  [-] EPUB Creation Test: FAILED (File not created)")
+    except Exception as e:
+        print(f"  [-] EPUB Creation Test Error: {e}")
+        print(f"  [!] Traceback: {traceback.format_exc()}")
+
+    print(f"\n[4/4] Summary:")
+    if all_libs_ok:
+        print("[+] Environment and dependencies look ready!")
+    else:
+        print("[-] Some dependencies need fixing before generating EPUB files.")
+    print("=========================================\n")
 
 def import_opml(filepath):
     if not os.path.exists(filepath):
@@ -162,71 +206,85 @@ def extract_full_html_readability(url):
     return title, str(soup)
 
 def export_rss_xml(articles_data, output_filepath, bundle_title):
-    rss = ET.Element("rss", version="2.0")
-    channel = ET.SubElement(rss, "channel")
-    
-    title_elem = ET.SubElement(channel, "title")
-    title_elem.text = bundle_title
-    link_elem = ET.SubElement(channel, "link")
-    link_elem.text = "https://github.com"
-    desc_elem = ET.SubElement(channel, "description")
-    desc_elem.text = "Generated Full-Text RSS Stream by Feed2ebook"
-    
-    for item_data in articles_data:
-        item = ET.SubElement(channel, "item")
-        i_title = ET.SubElement(item, "title")
-        i_title.text = item_data['title']
-        i_link = ET.SubElement(item, "link")
-        i_link.text = item_data['url']
-        i_desc = ET.SubElement(item, "description")
-        i_desc.text = item_data['html_content']
+    try:
+        rss = ET.Element("rss", version="2.0")
+        channel = ET.SubElement(rss, "channel")
         
-    tree = ET.ElementTree(rss)
-    ensure_directory_exists(os.path.dirname(output_filepath))
-    tree.write(output_filepath, encoding="utf-8", xml_declaration=True)
-    print(f"[+] Full-text RSS XML saved: {output_filepath}")
+        title_elem = ET.SubElement(channel, "title")
+        title_elem.text = bundle_title
+        link_elem = ET.SubElement(channel, "link")
+        link_elem.text = "https://github.com"
+        desc_elem = ET.SubElement(channel, "description")
+        desc_elem.text = "Generated Full-Text RSS Stream by Feed2ebook"
+        
+        for item_data in articles_data:
+            item = ET.SubElement(channel, "item")
+            i_title = ET.SubElement(item, "title")
+            i_title.text = item_data['title']
+            i_link = ET.SubElement(item, "link")
+            i_link.text = item_data['url']
+            i_desc = ET.SubElement(item, "description")
+            i_desc.text = item_data['html_content']
+            
+        tree = ET.ElementTree(rss)
+        target_dir = ensure_directory_exists(os.path.dirname(output_filepath))
+        final_path = os.path.join(target_dir, os.path.basename(output_filepath))
+        tree.write(final_path, encoding="utf-8", xml_declaration=True)
+        print(f"[+] Full-text RSS XML saved: {final_path}")
+    except Exception as e:
+        print(f"[-] Error generating XML export: {e}")
 
 def build_epub(articles_data, output_dir, base_filename):
-    full_title = base_filename
-    book = epub.EpubBook()
-    book.set_identifier(str(time.time()))
-    book.set_title(full_title)
-    book.set_language('en')
-    book.add_author("Feed2ebook")
+    print(f"[+] Building EPUB file with {len(articles_data)} article(s)...")
+    try:
+        output_dir = ensure_directory_exists(output_dir)
+        full_title = base_filename
+        book = epub.EpubBook()
+        book.set_identifier(str(time.time()))
+        book.set_title(full_title)
+        book.set_language('en')
+        book.add_author("Feed2ebook")
 
-    chapters = []
-    spine = ['nav']
+        chapters = []
+        spine = ['nav']
 
-    for i, data in enumerate(articles_data):
-        c = epub.EpubHtml(title=data['title'], file_name=f'chap_{i}.xhtml', lang='en')
-        c.content = f"""
-        <html>
-        <head><title>{data['title']}</title></head>
-        <body>
-            <h2>{data['title']}</h2>
-            <p><b>Feed:</b> {data['feed_title']} | <a href='{data['url']}'>Original Source</a></p>
-            <hr/>
-            <div class="article-body">
-                {data['html_content']}
-            </div>
-        </body>
-        </html>
-        """
-        book.add_item(c)
-        chapters.append(c)
-        spine.append(c)
+        for i, data in enumerate(articles_data):
+            c = epub.EpubHtml(title=data['title'], file_name=f'chap_{i}.xhtml', lang='en')
+            c.content = f"""
+            <html>
+            <head><title>{data['title']}</title></head>
+            <body>
+                <h2>{data['title']}</h2>
+                <p><b>Feed:</b> {data['feed_title']} | <a href='{data['url']}'>Original Source</a></p>
+                <hr/>
+                <div class="article-body">
+                    {data['html_content']}
+                </div>
+            </body>
+            </html>
+            """
+            book.add_item(c)
+            chapters.append(c)
+            spine.append(c)
 
-    book.toc = tuple(chapters)
-    book.add_item(epub.EpubNcx())
-    book.add_item(epub.EpubNav())
-    book.spine = spine
+        book.toc = tuple(chapters)
+        book.add_item(epub.EpubNcx())
+        book.add_item(epub.EpubNav())
+        book.spine = spine
 
-    ensure_directory_exists(output_dir)
-    clean_name = sanitize_filename(base_filename)
-    epub_filepath = os.path.join(output_dir, f"{clean_name}.epub")
-    
-    epub.write_epub(epub_filepath, book, {})
-    print(f"[+] EPUB file saved: {epub_filepath}")
+        clean_name = sanitize_filename(base_filename)
+        epub_filepath = os.path.join(output_dir, f"{clean_name}.epub")
+        
+        epub.write_epub(epub_filepath, book, {})
+        
+        if os.path.exists(epub_filepath):
+            print(f"[+] EPUB successfully saved to: {epub_filepath}")
+        else:
+            print("[-] Error: EPUB file write command executed but file was not found on disk.")
+    except Exception as e:
+        print(f"[-] Failed to generate EPUB file: {e}")
+        print(f"[!] Running diagnostic check on environment...")
+        run_diagnostics()
 
 def process_feeds():
     config = load_config()
@@ -307,7 +365,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      # Exit / Delete
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  # OPML / Imports
 
-def draw_tui_menu(stdscr, selected_row, options, title=f"=== Feed2ebook Manager v{VERSION} ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -348,7 +406,7 @@ def curses_tui_loop(stdscr):
             (f"Import OPML Subscriptions", 6),
             (f"Export OPML Subscriptions", 6),
             (f"Configure Settings (Format: {config['export_format'].upper()}, Days: {config['max_days']})", 4),
-            (f"Check for Script Updates (v{VERSION})", 3),
+            ("Run System Diagnostics & Health Check", 4),
             ("Switch to Classic CLI Menu", 1),
             ("Exit Program", 5)
         ]
@@ -381,7 +439,7 @@ def curses_tui_loop(stdscr):
             elif current_row == 4:
                 settings_cli()
             elif current_row == 5:
-                check_for_updates()
+                run_diagnostics()
             elif current_row == 6:
                 return "cli"
             elif current_row == 7:
@@ -461,13 +519,13 @@ def settings_cli():
 def main_cli_menu():
     while True:
         config = load_config()
-        print(f"\n=== Feed2ebook Manager v{VERSION} ===")
+        print("\n=== Feed2ebook Manager ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
         print("4. Export OPML File")
         print(f"5. Settings (Format: {config['export_format'].upper()}, Days limit: {config['max_days']})")
-        print("6. Check for Script Updates")
+        print("6. Run System Diagnostics & Health Check")
         print("7. Launch TUI Graphical Menu")
         print("8. Exit")
         
@@ -484,7 +542,7 @@ def main_cli_menu():
         elif choice == "5":
             settings_cli()
         elif choice == "6":
-            check_for_updates()
+            run_diagnostics()
         elif choice == "7":
             res = curses.wrapper(curses_tui_loop)
             if res == "exit":
@@ -502,4 +560,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-        
