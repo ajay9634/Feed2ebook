@@ -10,7 +10,7 @@ echo "========================================="
 if [ -d "/data/data/com.termux/files/usr" ]; then
     echo "[+] Termux environment detected."
     pkg update -y
-    pkg install python python-pip libxml2 libxslt clang make git curl -y
+    pkg install python libxml2 libxslt clang make git curl -y
 else
     echo "[+] Standard Linux environment detected."
     if command -v apt-get &> /dev/null; then
@@ -26,25 +26,29 @@ fi
 # 2. Install Python Dependencies
 echo ""
 echo "[+] Installing required Python libraries..."
+pip install requests beautifulsoup4 readability-lxml feedparser ebooklib --break-system-packages 2>/dev/null || \
 pip install requests beautifulsoup4 readability-lxml feedparser ebooklib
 
-# 3. Setup Script Directory & Download feed2ebook.py if missing
+# 3. Setup Directory & Force Re-download / Cleanup Old Script
 INSTALL_DIR="$HOME/.feed2ebook"
 mkdir -p "$INSTALL_DIR"
 
-PYTHON_SCRIPT="$INSTALL_DIR/feed2ebook.py"
+PYTHON_SCRIPT="$INSTALL_DIR/Feed2ebook.py"
 
-if [ ! -f "$PYTHON_SCRIPT" ]; then
-    echo ""
-    echo "[+] Downloading feed2ebook.py from GitHub..."
-    curl -sSL "https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/feed2ebook.py" -o "$PYTHON_SCRIPT"
+# Remove old or corrupt script if it exists
+if [ -f "$PYTHON_SCRIPT" ]; then
+    echo "[+] Cleaning up previous script version..."
+    rm -f "$PYTHON_SCRIPT"
 fi
+
+echo "[+] Downloading fresh Feed2ebook.py from GitHub..."
+curl -sSLf "https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/Feed2ebook.py" -o "$PYTHON_SCRIPT"
 
 chmod +x "$PYTHON_SCRIPT"
 
-# 4. Create Terminal Shortcut / Wrapper Command
+# 4. Create / Update Terminal Shortcut Command
 echo ""
-echo "[+] Creating shortcut command 'feed2ebook'..."
+echo "[+] Updating shortcut command 'feed2ebook'..."
 
 if [ -d "/data/data/com.termux/files/usr/bin" ]; then
     BIN_DIR="/data/data/com.termux/files/usr/bin"
