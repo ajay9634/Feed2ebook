@@ -42,6 +42,7 @@ if [ -f "$PYTHON_SCRIPT" ]; then
 fi
 echo "[+] full-upgrading..."
 apt update && apt full-upgrade
+rm -f ~/.feed2ebook/Feed2ebook.py
 echo "[+] Downloading fresh Feed2ebook.py from GitHub..."
 curl -sSLf "https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/Feed2ebook.py" -o "$PYTHON_SCRIPT"
 
