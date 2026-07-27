@@ -20,9 +20,9 @@ HEADERS = {
 def load_config():
     """Load configuration with default fallback."""
     default_config = {
-        "download_path": os.path.join(os.path.dirname(os.path.abspath(__file__)), "Download", "Feed2ebook_Articles"),
+        "download_path": "/sdcard/Download/Feed2ebook_Articles",
         "max_days": 7,
-        "max_articles_per_feed": 5,
+        "max_articles_per_feed": 20,
         "export_format": "epub"  # Options: 'epub', 'xml', 'all'
     }
     if os.path.exists(CONFIG_FILE):
@@ -445,3 +445,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
