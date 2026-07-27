@@ -14,13 +14,15 @@
 
 ---
 
-## ⚡ One-Line Automatic Installer
+## ⚡ Feed2ebook Installer
 
-Note: Run `termux-setup-storage` first on Termux to allow saving to your Download folder.
+Note: Run `termux-setup-storage` first in Termux to allow saving to your Download folder. If you encounter a "CANNOT LINK EXECUTABLE" error, run `apt update && apt full-upgrade` and then run the installation command again.
 
-Launch the app anytime by typing: `feed2ebook`
+After installation, launch the app anytime by typing: `feed2ebook`
 
-For **Termux** or **Linux**, run this single command:
+
+For **Termux** , run this install command: 
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh | bash
+
