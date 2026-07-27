@@ -10,7 +10,7 @@ echo "========================================="
 if [ -d "/data/data/com.termux/files/usr" ]; then
     echo "[+] Termux environment detected."
     pkg update -y
-    pkg install python libxml2 libxslt clang make git curl -y
+    pkg install python python-pip libxml2 libxslt clang make git curl -y
 else
     echo "[+] Standard Linux environment detected."
     if command -v apt-get &> /dev/null; then
@@ -26,7 +26,6 @@ fi
 # 2. Install Python Dependencies
 echo ""
 echo "[+] Installing required Python libraries..."
-pip install --upgrade pip
 pip install requests beautifulsoup4 readability-lxml feedparser ebooklib
 
 # 3. Setup Script Directory & Download feed2ebook.py if missing
