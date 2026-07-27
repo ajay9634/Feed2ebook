@@ -16,10 +16,11 @@
 
 ## ⚡ One-Line Automatic Installer
 
+Note: Run `termux-setup-storage` first on Termux to allow saving to your Download folder.
+
+Launch the app anytime by typing: `feed2ebook`
+
 For **Termux** or **Linux**, run this single command:
 
-curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh | bash
-
-Note: Run termux-setup-storage first on Termux to allow saving to your Download folder.
-
-Launch the app anytime by typing: feed2ebook
+```bash
+curl -sSL [https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh](https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh) | bash
