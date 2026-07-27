@@ -17,8 +17,15 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+def ensure_directory_exists(path):
+    """Utility to safely create directory if it doesn't exist."""
+    try:
+        os.makedirs(path, exist_ok=True)
+    except Exception as e:
+        print(f"[-] Warning: Could not create folder {path}: {e}")
+
 def load_config():
-    """Load configuration with default fallback."""
+    """Load configuration with default fallback and ensure target directory exists."""
     default_config = {
         "download_path": "/sdcard/Download/Feed2ebook_Articles",
         "max_days": 7,
@@ -37,9 +44,14 @@ def load_config():
     if default_config["export_format"] not in ["epub", "xml", "all"]:
         default_config["export_format"] = "epub"
 
+    # Create target download folder immediately on setup/load
+    ensure_directory_exists(default_config["download_path"])
+
     return default_config
 
 def save_config(config):
+    # Ensure folder exists when saving modified configuration
+    ensure_directory_exists(config["download_path"])
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=4)
 
@@ -86,6 +98,7 @@ def export_opml(feeds, filepath):
         
     tree = ET.ElementTree(root)
     try:
+        ensure_directory_exists(os.path.dirname(filepath))
         tree.write(filepath, encoding="utf-8", xml_declaration=True)
         print(f"[+] Feeds exported to OPML: {filepath}")
     except Exception as e:
@@ -133,7 +146,7 @@ def export_rss_xml(articles_data, output_filepath, bundle_title):
         i_desc.text = item_data['html_content']
         
     tree = ET.ElementTree(rss)
-    os.makedirs(os.path.dirname(output_filepath), exist_ok=True)
+    ensure_directory_exists(os.path.dirname(output_filepath))
     tree.write(output_filepath, encoding="utf-8", xml_declaration=True)
     print(f"[+] Full-text RSS XML saved: {output_filepath}")
 
@@ -172,7 +185,7 @@ def build_epub(articles_data, output_dir, base_filename):
     book.add_item(epub.EpubNav())
     book.spine = spine
 
-    os.makedirs(output_dir, exist_ok=True)
+    ensure_directory_exists(output_dir)
     clean_name = sanitize_filename(base_filename)
     epub_filepath = os.path.join(output_dir, f"{clean_name}.epub")
     
@@ -400,14 +413,16 @@ def settings_cli():
         else:
             print("[-] Invalid format option.")
     elif field == "D":
-        config["download_path"] = input("Enter new path: ").strip()
+        new_path = input("Enter new path: ").strip()
+        if new_path:
+            config["download_path"] = new_path
     save_config(config)
     print("[+] Settings updated successfully!")
 
 def main_cli_menu():
     while True:
         config = load_config()
-        print("\n=== Feed2ebook Manager ===")
+        print("\n=== Feed2ebook Manager v1.0 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
@@ -445,4 +460,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-    
+                
