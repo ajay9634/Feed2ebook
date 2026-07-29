@@ -44,4 +44,5 @@ curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/dependencie
 ```bash
 curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install_feed2book.sh | bash
 ```
+5. After installation, launch the app anytime by typing: `feed2ebook`
 ---
