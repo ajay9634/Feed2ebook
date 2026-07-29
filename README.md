@@ -22,11 +22,11 @@
 
 Note: Run `termux-setup-storage` first in Termux to allow saving to your Download folder. If you encounter a "CANNOT LINK EXECUTABLE" error, run `apt update && apt full-upgrade` and then run the installation command again.
 
-After installation, launch the app anytime by typing: `feed2ebook`
-
-
 For **Termux** , run this command to install or update : 
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install.sh | bash
+```
+
+After installation, launch the app anytime by typing: `feed2ebook`
 
