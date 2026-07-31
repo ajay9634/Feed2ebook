@@ -309,7 +309,7 @@ def process_and_embed_images(html_content, book, base_url=""):
     return str(soup)
 
 def group_articles_by_feed(articles_data):
-    """Groups flat article list into a dict: {feed_title: [article_dict, ...]}."""
+    """Groups flat article list into a dict: {feed_title: [article_dict, ...]} preserving order."""
     grouped = defaultdict(list)
     for article in articles_data:
         grouped[article['feed_title']].append(article)
@@ -330,7 +330,6 @@ def generate_toc_html(grouped_articles, is_epub=False, mode="auto"):
         <h1 style="border-bottom: 2px solid #333; padding-bottom: 5px; font-size: 1.5em;">Table of Contents</h1>
     """
 
-    # --- SIMPLE SECTION ---
     if mode == "simple":
         for feed_title, articles in grouped_articles.items():
             toc_html += f"""
@@ -347,7 +346,6 @@ def generate_toc_html(grouped_articles, is_epub=False, mode="auto"):
                 """
             toc_html += "</ul>"
 
-    # --- ADVANCED SECTION ---
     if mode == "advanced":
         for feed_title, articles in grouped_articles.items():
             toc_html += f"""
@@ -379,8 +377,6 @@ def generate_toc_html(grouped_articles, is_epub=False, mode="auto"):
     toc_html += "</div><hr style='margin: 20px 0;'/>"
     return toc_html
 
-# --- EXPORT BUILDERS ---
-
 def build_epub(articles_data, output_dir, base_filename, include_images=True, toc_style="auto"):
     print(f"[+] Building EPUB file with {len(articles_data)} article(s) (TOC Style: {toc_style.upper()})...")
     try:
@@ -394,7 +390,6 @@ def build_epub(articles_data, output_dir, base_filename, include_images=True, to
         chapters = []
         spine = []
 
-        # If 'auto', let standard e-reader nav appear in the spine
         if toc_style == "auto":
             spine.append('nav')
 
@@ -405,7 +400,6 @@ def build_epub(articles_data, output_dir, base_filename, include_images=True, to
 
         grouped = group_articles_by_feed(articles_data)
 
-        # Build custom HTML Table of Contents page (for simple, advanced)
         if toc_style not in ["disabled", "auto"]:
             toc_content = generate_toc_html(grouped, is_epub=True, mode=toc_style)
             toc_chap = epub.EpubHtml(title="Table of Contents", file_name="toc.xhtml", lang="en")
@@ -413,7 +407,6 @@ def build_epub(articles_data, output_dir, base_filename, include_images=True, to
             book.add_item(toc_chap)
             spine.append(toc_chap)
 
-        # Content Chapters Grouped by Feed
         for feed_title, items in grouped.items():
             for item in items:
                 html = item['html_content']
@@ -442,7 +435,6 @@ def build_epub(articles_data, output_dir, base_filename, include_images=True, to
         book.toc = tuple(chapters)
         book.add_item(epub.EpubNcx())
         
-        # Add EpubNav element for spec compatibility
         nav_item = epub.EpubNav()
         book.add_item(nav_item)
         
@@ -456,7 +448,6 @@ def build_epub(articles_data, output_dir, base_filename, include_images=True, to
         print(f"[-] Failed to generate EPUB file: {e}")
 
 def build_html(articles_data, output_dir, base_filename, toc_style="auto"):
-    """Exports articles as a KOReader & e-ink friendly single HTML file."""
     print(f"[+] Building KOReader-compatible HTML file with {len(articles_data)} article(s)...")
     try:
         output_dir = ensure_directory_exists(output_dir)
@@ -485,36 +476,16 @@ def build_html(articles_data, output_dir, base_filename, toc_style="auto"):
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>{base_filename}</title>
             <style>
-                * {{
-                    box-sizing: border-box;
-                    max-width: 100% !important;
-                }}
+                * {{ box-sizing: border-box; max-width: 100% !important; }}
                 html, body {{
-                    margin: 0;
-                    padding: 8px;
-                    width: 100%;
+                    margin: 0; padding: 8px; width: 100%;
                     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-                    line-height: 1.5;
-                    color: #000;
-                    background-color: #fff;
-                    word-wrap: break-word;
-                    overflow-x: hidden;
+                    line-height: 1.5; color: #000; background-color: #fff;
+                    word-wrap: break-word; overflow-x: hidden;
                 }}
-                img {{
-                    max-width: 100% !important;
-                    height: auto !important;
-                    display: block;
-                    margin: 10px auto;
-                }}
-                table {{
-                    border-collapse: collapse;
-                    width: 100% !important;
-                    table-layout: auto;
-                }}
-                pre, code {{
-                    white-space: pre-wrap;
-                    word-break: break-all;
-                }}
+                img {{ max-width: 100% !important; height: auto !important; display: block; margin: 10px auto; }}
+                table {{ border-collapse: collapse; width: 100% !important; table-layout: auto; }}
+                pre, code {{ white-space: pre-wrap; word-break: break-all; }}
             </style>
         </head>
         <body>
@@ -533,7 +504,6 @@ def build_html(articles_data, output_dir, base_filename, toc_style="auto"):
         print(f"[-] Error generating HTML export: {e}")
 
 def build_markdown(articles_data, output_dir, base_filename, toc_style="auto"):
-    """Exports articles into clean Markdown format with optional Table of Contents."""
     if not check_and_install_package("markdownify"):
         return
 
@@ -554,7 +524,6 @@ def build_markdown(articles_data, output_dir, base_filename, toc_style="auto"):
                     for item in items:
                         md_output += f"- [{item['title']}]({item['url']})\n"
                     md_output += "\n"
-                
                 if toc_style == "advanced":
                     md_output += "| # | Title | Link |\n|---|---|---|\n"
                     for idx, item in enumerate(items, 1):
@@ -584,21 +553,15 @@ def export_rss_xml(articles_data, output_filepath, bundle_title):
         rss = ET.Element("rss", version="2.0")
         channel = ET.SubElement(rss, "channel")
         
-        title_elem = ET.SubElement(channel, "title")
-        title_elem.text = bundle_title
-        link_elem = ET.SubElement(channel, "link")
-        link_elem.text = "https://github.com"
-        desc_elem = ET.SubElement(channel, "description")
-        desc_elem.text = "Generated Full-Text RSS Stream by Feed2ebook"
+        ET.SubElement(channel, "title").text = bundle_title
+        ET.SubElement(channel, "link").text = "https://github.com"
+        ET.SubElement(channel, "description").text = "Generated Full-Text RSS Stream by Feed2ebook"
         
         for item_data in articles_data:
             item = ET.SubElement(channel, "item")
-            i_title = ET.SubElement(item, "title")
-            i_title.text = item_data['title']
-            i_link = ET.SubElement(item, "link")
-            i_link.text = item_data['url']
-            i_desc = ET.SubElement(item, "description")
-            i_desc.text = f"[Feed: {item_data['feed_title']}] " + item_data['html_content']
+            ET.SubElement(item, "title").text = item_data['title']
+            ET.SubElement(item, "link").text = item_data['url']
+            ET.SubElement(item, "description").text = f"[Feed: {item_data['feed_title']}] " + item_data['html_content']
             
         tree = ET.ElementTree(rss)
         target_dir = ensure_directory_exists(os.path.dirname(output_filepath))
@@ -608,8 +571,6 @@ def export_rss_xml(articles_data, output_filepath, bundle_title):
     except Exception as e:
         print(f"[-] Error generating XML export: {e}")
 
-# --- MAIN PROCESS PIPELINE ---
-
 def process_feeds():
     config = load_config()
     feeds = load_feeds()
@@ -618,44 +579,47 @@ def process_feeds():
         print("[-] No RSS feeds found. Add them manually or import via OPML first.")
         return
 
-    print(f"\n[+] Processing {len(feeds)} feed(s) with Feed2ebook Readability extraction...")
+    print(f"\n[+] Processing {len(feeds)} feed(s) in custom order with Feed2ebook Readability...")
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=config["max_days"])
     all_collected_articles = []
 
+    # Respects the exact list order saved by the user
     for feed_url in feeds:
         print(f"\nFetching Feed: {feed_url}")
-        parsed_feed = feedparser.parse(feed_url)
-        feed_title = parsed_feed.feed.get("title", "RSS_Feed")
-        
-        count = 0
-        for entry in parsed_feed.entries:
-            if count >= config["max_articles_per_feed"]:
-                break
-                
-            pub_date = None
-            if hasattr(entry, "published_parsed") and entry.published_parsed:
-                pub_date = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc)
-            elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
-                pub_date = datetime.fromtimestamp(time.mktime(entry.updated_parsed), tz=timezone.utc)
-                
-            if pub_date and pub_date < cutoff_date:
-                continue
-                
-            article_url = entry.link
-            try:
-                print(f" -> Downloading HTML: {entry.get('title', article_url)}")
-                title, html_content = extract_full_html_readability(article_url, include_images=config.get("include_images", True))
-                
-                all_collected_articles.append({
-                    "title": title or entry.get("title", "Untitled"),
-                    "url": article_url,
-                    "feed_title": feed_title,
-                    "html_content": html_content
-                })
-                
-                count += 1
-            except Exception as e:
-                print(f"    [-] Error extracting article HTML: {e}")
+        try:
+            parsed_feed = feedparser.parse(feed_url)
+            feed_title = parsed_feed.feed.get("title", feed_url)
+            
+            count = 0
+            for entry in parsed_feed.entries:
+                if count >= config["max_articles_per_feed"]:
+                    break
+                    
+                pub_date = None
+                if hasattr(entry, "published_parsed") and entry.published_parsed:
+                    pub_date = datetime.fromtimestamp(time.mktime(entry.published_parsed), tz=timezone.utc)
+                elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
+                    pub_date = datetime.fromtimestamp(time.mktime(entry.updated_parsed), tz=timezone.utc)
+                    
+                if pub_date and pub_date < cutoff_date:
+                    continue
+                    
+                article_url = entry.link
+                try:
+                    print(f" -> Downloading HTML: {entry.get('title', article_url)}")
+                    title, html_content = extract_full_html_readability(article_url, include_images=config.get("include_images", True))
+                    
+                    all_collected_articles.append({
+                        "title": title or entry.get("title", "Untitled"),
+                        "url": article_url,
+                        "feed_title": feed_title,
+                        "html_content": html_content
+                    })
+                    count += 1
+                except Exception as e:
+                    print(f"    [-] Error extracting article HTML: {e}")
+        except Exception as e:
+            print(f"[-] Error parsing feed URL '{feed_url}': {e}")
 
     if not all_collected_articles:
         print("[-] No matching articles found to compile.")
@@ -685,19 +649,17 @@ def process_feeds():
 
     print("\n[+] Feed2ebook processing completed!")
 
-# --- COLORFUL CURSES TUI INTERFACE ---
-
 def init_colors():
     curses.start_color()
     curses.use_default_colors()
-    curses.init_pair(1, curses.COLOR_CYAN, -1)     # Header Title
-    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN) # Highlighted Option
-    curses.init_pair(3, curses.COLOR_GREEN, -1)    # Action / Active Status
-    curses.init_pair(4, curses.COLOR_YELLOW, -1)   # Settings / Info
-    curses.init_pair(5, curses.COLOR_RED, -1)      # Exit / Delete
-    curses.init_pair(6, curses.COLOR_MAGENTA, -1)  # OPML / Imports
+    curses.init_pair(1, curses.COLOR_CYAN, -1)     
+    curses.init_pair(2, curses.COLOR_BLACK, curses.COLOR_CYAN) 
+    curses.init_pair(3, curses.COLOR_GREEN, -1)    
+    curses.init_pair(4, curses.COLOR_YELLOW, -1)   
+    curses.init_pair(5, curses.COLOR_RED, -1)      
+    curses.init_pair(6, curses.COLOR_MAGENTA, -1)  
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.2.0 ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.2.1 ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -723,7 +685,6 @@ def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v
     stdscr.refresh()
 
 def select_toc_style_cli(config):
-    """Interactive selector for TOC style."""
     print("\n=========================================")
     print("      Select Table of Contents Style     ")
     print("=========================================")
@@ -736,7 +697,6 @@ def select_toc_style_cli(config):
     
     choice = input("\nSelect option (1-4): ").strip()
     mapping = {"1": "auto", "2": "disabled", "3": "simple", "4": "advanced"}
-    
     if choice in mapping:
         config["toc_style"] = mapping[choice]
         save_config(config)
@@ -745,7 +705,6 @@ def select_toc_style_cli(config):
 def curses_tui_loop(stdscr):
     curses.curs_set(0)
     init_colors()
-    
     current_row = 0
     
     while True:
@@ -756,7 +715,7 @@ def curses_tui_loop(stdscr):
         
         menu_items = [
             (f"Run Processing Pipeline (Target: {config['export_format'].upper()})", 3),
-            (f"Manage Feeds ({len(feeds)} active)", 1),
+            (f"Manage & Reorder Feeds ({len(feeds)} active)", 1),
             (f"Import OPML Subscriptions", 6),
             (f"Export OPML Subscriptions", 6),
             (f"Select Export Directory Path", 4),
@@ -769,20 +728,13 @@ def curses_tui_loop(stdscr):
         ]
         
         current_row = max(0, min(current_row, len(menu_items) - 1))
-        
         draw_tui_menu(stdscr, current_row, menu_items)
         key = stdscr.getch()
 
         if key in [curses.KEY_UP, ord('k')]:
-            if current_row > 0:
-                current_row -= 1
-            else:
-                current_row = len(menu_items) - 1
+            current_row = max(0, current_row - 1)
         elif key in [curses.KEY_DOWN, ord('j')]:
-            if current_row < len(menu_items) - 1:
-                current_row += 1
-            else:
-                current_row = 0
+            current_row = min(len(menu_items) - 1, current_row + 1)
         elif key in [10, 13]:
             curses.endwin()
             if current_row == 0:
@@ -813,35 +765,83 @@ def curses_tui_loop(stdscr):
             input("\nPress Enter to return to Feed2ebook TUI...")
             stdscr = curses.initscr()
             curses.curs_set(0)
-
         elif key in [ord('q'), ord('Q')]:
             return "cli"
 
-# --- CLI FALLBACK & MANUAL MENUS ---
-
 def manage_feeds_cli():
-    feeds = load_feeds()
-    print("\nCurrent Feeds:")
-    for idx, f in enumerate(feeds, 1):
-        print(f"{idx}. {f}")
-    sub = input("\nType a URL to add, or enter a number to delete (or press Enter to go back): ").strip()
-    if sub.startswith("http"):
-        feeds.append(sub)
-        save_feeds(feeds)
-        print("[+] Feed added.")
-    elif sub.isdigit():
-        idx = int(sub) - 1
-        if 0 <= idx < len(feeds):
-            removed = feeds.pop(idx)
+    """Interactive feed manager allowing addition, deletion, and reordering (move up/down)."""
+    while True:
+        feeds = load_feeds()
+        print("\n=========================================")
+        print("          Manage & Reorder Feeds         ")
+        print("=========================================")
+        if not feeds:
+            print("[-] No feeds currently saved.")
+        else:
+            for idx, f in enumerate(feeds, 1):
+                print(f"  {idx}. {f}")
+        
+        print("\nCommands:")
+        print("  [URL]           -> Add a new feed URL")
+        print("  [del <number>]  -> Delete feed by number (e.g., del 2)")
+        print("  [u <number>]    -> Move feed UP (e.g., u 3)")
+        print("  [d <number>]    -> Move feed DOWN (e.g., d 1)")
+        print("  [clear all]     -> Delete all feeds (requires confirmation)")
+        print("  [Press Enter]   -> Return to main menu")
+        
+        choice = input("\nEnter command: ").strip()
+        if not choice:
+            break
+            
+        parts = choice.split()
+        cmd = parts[0].lower()
+        
+        if cmd == "del" and len(parts) > 1 and parts[1].isdigit():
+            idx = int(parts[1]) - 1
+            if 0 <= idx < len(feeds):
+                removed = feeds.pop(idx)
+                save_feeds(feeds)
+                print(f"[+] Removed feed: {removed}")
+            else:
+                print("[-] Invalid feed number.")
+        elif cmd == "clear" and len(parts) > 1 and parts[1].lower() == "all":
+            confirm = input("Are you sure you want to delete ALL feeds? Type 'yes' to confirm: ").strip().lower()
+            if confirm == "yes":
+                save_feeds([])
+                print("[+] All feeds have been deleted.")
+            else:
+                print("[-] Action cancelled.")
+        elif cmd == "u" and len(parts) > 1 and parts[1].isdigit():
+            idx = int(parts[1]) - 1
+            if 0 < idx < len(feeds):
+                # Swap with previous element
+                feeds[idx], feeds[idx - 1] = feeds[idx - 1], feeds[idx]
+                save_feeds(feeds)
+                print(f"[+] Moved feed #{idx + 1} UP.")
+            else:
+                print("[-] Feed is already at the top or invalid index.")
+        elif cmd == "d" and len(parts) > 1 and parts[1].isdigit():
+            idx = int(parts[1]) - 1
+            if 0 <= idx < len(feeds) - 1:
+                # Swap with next element
+                feeds[idx], feeds[idx + 1] = feeds[idx + 1], feeds[idx]
+                save_feeds(feeds)
+                print(f"[+] Moved feed #{idx + 1} DOWN.")
+            else:
+                print("[-] Feed is already at the bottom or invalid index.")
+        elif choice.startswith("http"):
+            feeds.append(choice)
             save_feeds(feeds)
-            print(f"[-] Removed: {removed}")
+            print("[+] New feed added successfully.")
+        else:
+            print("[-] Unknown command format. Try again.")
 
 def import_opml_cli():
     path = input("Enter path to OPML file (e.g., /sdcard/Download/subscriptions.opml): ").strip()
     new_feeds = import_opml(path)
     if new_feeds:
         existing = load_feeds()
-        merged = list(set(existing + new_feeds))
+        merged = existing + [f for f in new_feeds if f not in existing]
         save_feeds(merged)
 
 def export_opml_cli():
@@ -906,9 +906,9 @@ def main_cli_menu():
         img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
         toc_mode = config.get("toc_style", "auto").upper()
         
-        print("\n=== Feed2ebook Manager v0.2.0 ===")
+        print("\n=== Feed2ebook Manager v0.2.1 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
-        print(f"2. Manage Feeds ({len(load_feeds())} currently saved)")
+        print(f"2. Manage & Reorder Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
         print("4. Export OPML File")
         print("5. Choose Export Path Location")
