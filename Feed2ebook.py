@@ -146,17 +146,38 @@ def choose_export_path_cli(config):
             print("[-] If choosing phone downloads, run 'termux-setup-storage' in Termux first.")
 
 def load_feeds():
+    """Loads feeds from JSON file (supports string URLs and dict structures)."""
     if os.path.exists(FEEDS_FILE):
         try:
             with open(FEEDS_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                normalized = []
+                for item in data:
+                    if isinstance(item, str):
+                        normalized.append({"url": item})
+                    elif isinstance(item, dict) and "url" in item:
+                        normalized.append(item)
+                return normalized
         except Exception:
             pass
     return []
 
 def save_feeds(feeds):
+    """Saves feeds list to JSON file."""
     with open(FEEDS_FILE, "w") as f:
         json.dump(feeds, f, indent=4)
+
+def get_feed_url(feed_item):
+    """Safely extracts feed URL string."""
+    if isinstance(feed_item, dict):
+        return feed_item.get("url", "")
+    return str(feed_item)
+
+def get_feed_setting(feed_item, key, global_config):
+    """Retrieves feed-specific setting override, fallback to global config if unset."""
+    if isinstance(feed_item, dict) and key in feed_item and feed_item[key] is not None:
+        return feed_item[key]
+    return global_config.get(key)
 
 def run_diagnostics():
     """Auto-checks environment, write permissions, and tests EPUB export."""
@@ -241,7 +262,8 @@ def export_opml(feeds, filepath):
     title.text = "Feed2ebook Subscriptions"
     body = ET.SubElement(root, "body")
     
-    for url in feeds:
+    for item in feeds:
+        url = get_feed_url(item)
         ET.SubElement(body, "outline", type="rss", text=url, xmlUrl=url)
         
     tree = ET.ElementTree(root)
@@ -316,12 +338,6 @@ def group_articles_by_feed(articles_data):
     return grouped
 
 def generate_toc_html(grouped_articles, is_epub=False, mode="auto"):
-    """
-    Generates Table of Contents HTML based on chosen mode:
-    'auto' / 'disabled': Returns empty string (letting e-reader handle nav or disabling)
-    'simple'  : Bulleted list grouped by feed with direct headline links
-    'advanced': Detailed structured table with article #, headline, and original source links
-    """
     if mode in ["disabled", "auto"]:
         return ""
 
@@ -579,20 +595,29 @@ def process_feeds():
         print("[-] No RSS feeds found. Add them manually or import via OPML first.")
         return
 
-    print(f"\n[+] Processing {len(feeds)} feed(s) in custom order with Feed2ebook Readability...")
-    cutoff_date = datetime.now(timezone.utc) - timedelta(days=config["max_days"])
+    print(f"\n[+] Processing {len(feeds)} feed(s) with custom per-feed or global settings...")
     all_collected_articles = []
 
-    # Respects the exact list order saved by the user
-    for feed_url in feeds:
-        print(f"\nFetching Feed: {feed_url}")
+    for feed_item in feeds:
+        feed_url = get_feed_url(feed_item)
+        if not feed_url:
+            continue
+
+        # Evaluate per-feed settings with global fallbacks
+        feed_max_days = get_feed_setting(feed_item, "max_days", config)
+        feed_max_articles = get_feed_setting(feed_item, "max_articles_per_feed", config)
+        feed_include_images = get_feed_setting(feed_item, "include_images", config)
+
+        cutoff_date = datetime.now(timezone.utc) - timedelta(days=feed_max_days)
+        print(f"\nFetching Feed: {feed_url} [Max Days: {feed_max_days}, Max Articles: {feed_max_articles}]")
+        
         try:
             parsed_feed = feedparser.parse(feed_url)
             feed_title = parsed_feed.feed.get("title", feed_url)
             
             count = 0
             for entry in parsed_feed.entries:
-                if count >= config["max_articles_per_feed"]:
+                if count >= feed_max_articles:
                     break
                     
                 pub_date = None
@@ -607,7 +632,7 @@ def process_feeds():
                 article_url = entry.link
                 try:
                     print(f" -> Downloading HTML: {entry.get('title', article_url)}")
-                    title, html_content = extract_full_html_readability(article_url, include_images=config.get("include_images", True))
+                    title, html_content = extract_full_html_readability(article_url, include_images=feed_include_images)
                     
                     all_collected_articles.append({
                         "title": title or entry.get("title", "Untitled"),
@@ -659,7 +684,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.2.1 ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.3 ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -715,11 +740,11 @@ def curses_tui_loop(stdscr):
         
         menu_items = [
             (f"Run Processing Pipeline (Target: {config['export_format'].upper()})", 3),
-            (f"Manage & Reorder Feeds ({len(feeds)} active)", 1),
+            (f"Manage & Configure Feeds ({len(feeds)} active)", 1),
             (f"Import OPML Subscriptions", 6),
             (f"Export OPML Subscriptions", 6),
             (f"Select Export Directory Path", 4),
-            (f"Toggle Article Images (Current: {img_status})", 4),
+            (f"Toggle Global Article Images (Current: {img_status})", 4),
             (f"Change Table of Contents Mode (Current: {toc_mode})", 4),
             (f"Configure Settings (Format: {config['export_format'].upper()}, Days: {config['max_days']})", 4),
             ("Run System Diagnostics & Health Check", 4),
@@ -768,25 +793,94 @@ def curses_tui_loop(stdscr):
         elif key in [ord('q'), ord('Q')]:
             return "cli"
 
+def configure_single_feed_cli(feeds, idx, global_config):
+    """Submenu to manage individual settings (limit, max_days, include_images) per feed."""
+    feed = feeds[idx]
+    url = get_feed_url(feed)
+
+    while True:
+        days_str = f"{feed.get('max_days')} days" if "max_days" in feed and feed["max_days"] is not None else f"Global Default ({global_config['max_days']} days)"
+        limit_str = f"{feed.get('max_articles_per_feed')} articles" if "max_articles_per_feed" in feed and feed["max_articles_per_feed"] is not None else f"Global Default ({global_config['max_articles_per_feed']})"
+        
+        if "include_images" in feed and feed["include_images"] is not None:
+            img_str = "ENABLED" if feed["include_images"] else "DISABLED"
+        else:
+            img_str = f"Global Default ({'ENABLED' if global_config.get('include_images', True) else 'DISABLED'})"
+
+        print("\n-----------------------------------------")
+        print(f" Config Settings for Feed #{idx + 1}")
+        print(f" URL: {url}")
+        print("-----------------------------------------")
+        print(f"  1. Max Article Age (Days)  : {days_str}")
+        print(f"  2. Max Articles Limit      : {limit_str}")
+        print(f"  3. Include Images Override : {img_str}")
+        print("  4. Reset Feed to Global Defaults")
+        print("  0. Save & Return to Feed Manager")
+
+        choice = input("\nChoose setting to modify (0-4): ").strip()
+        if choice == "1":
+            val = input("Enter custom max days (or press Enter to reset to global): ").strip()
+            if val.isdigit():
+                feed["max_days"] = int(val)
+            elif val == "":
+                feed.pop("max_days", None)
+            save_feeds(feeds)
+        elif choice == "2":
+            val = input("Enter custom max articles limit (or press Enter to reset to global): ").strip()
+            if val.isdigit():
+                feed["max_articles_per_feed"] = int(val)
+            elif val == "":
+                feed.pop("max_articles_per_feed", None)
+            save_feeds(feeds)
+        elif choice == "3":
+            current = feed.get("include_images")
+            if current is None:
+                feed["include_images"] = False
+            elif current is False:
+                feed["include_images"] = True
+            else:
+                feed.pop("include_images", None)
+            save_feeds(feeds)
+        elif choice == "4":
+            feeds[idx] = {"url": url}
+            feed = feeds[idx]
+            save_feeds(feeds)
+            print("[+] Reset all custom settings for this feed.")
+        elif choice == "0" or choice == "":
+            break
+
 def manage_feeds_cli():
-    """Interactive feed manager allowing addition, deletion, and reordering (move up/down)."""
+    """Interactive feed manager with per-feed settings, addition, deletion, and reordering."""
+    config = load_config()
     while True:
         feeds = load_feeds()
         print("\n=========================================")
-        print("          Manage & Reorder Feeds         ")
+        print("        Manage & Configure Feeds         ")
         print("=========================================")
         if not feeds:
             print("[-] No feeds currently saved.")
         else:
             for idx, f in enumerate(feeds, 1):
-                print(f"  {idx}. {f}")
+                url = get_feed_url(f)
+                opts = []
+                if isinstance(f, dict):
+                    if "max_days" in f and f["max_days"] is not None:
+                        opts.append(f"Days: {f['max_days']}")
+                    if "max_articles_per_feed" in f and f["max_articles_per_feed"] is not None:
+                        opts.append(f"Limit: {f['max_articles_per_feed']}")
+                    if "include_images" in f and f["include_images"] is not None:
+                        opts.append(f"Images: {'ON' if f['include_images'] else 'OFF'}")
+                
+                opts_str = f" [{', '.join(opts)}]" if opts else " [Global Defaults]"
+                print(f"  {idx}. {url}{opts_str}")
         
         print("\nCommands:")
         print("  [URL]           -> Add a new feed URL")
+        print("  [s <number>]    -> Configure per-feed settings (limit, days, images)")
         print("  [del <number>]  -> Delete feed by number (e.g., del 2)")
         print("  [u <number>]    -> Move feed UP (e.g., u 3)")
         print("  [d <number>]    -> Move feed DOWN (e.g., d 1)")
-        print("  [clear all]     -> Delete all feeds (requires confirmation)")
+        print("  [clear all]     -> Delete all feeds")
         print("  [Press Enter]   -> Return to main menu")
         
         choice = input("\nEnter command: ").strip()
@@ -796,12 +890,18 @@ def manage_feeds_cli():
         parts = choice.split()
         cmd = parts[0].lower()
         
-        if cmd == "del" and len(parts) > 1 and parts[1].isdigit():
+        if cmd in ["s", "edit"] and len(parts) > 1 and parts[1].isdigit():
+            idx = int(parts[1]) - 1
+            if 0 <= idx < len(feeds):
+                configure_single_feed_cli(feeds, idx, config)
+            else:
+                print("[-] Invalid feed number.")
+        elif cmd == "del" and len(parts) > 1 and parts[1].isdigit():
             idx = int(parts[1]) - 1
             if 0 <= idx < len(feeds):
                 removed = feeds.pop(idx)
                 save_feeds(feeds)
-                print(f"[+] Removed feed: {removed}")
+                print(f"[+] Removed feed: {get_feed_url(removed)}")
             else:
                 print("[-] Invalid feed number.")
         elif cmd == "clear" and len(parts) > 1 and parts[1].lower() == "all":
@@ -814,7 +914,6 @@ def manage_feeds_cli():
         elif cmd == "u" and len(parts) > 1 and parts[1].isdigit():
             idx = int(parts[1]) - 1
             if 0 < idx < len(feeds):
-                # Swap with previous element
                 feeds[idx], feeds[idx - 1] = feeds[idx - 1], feeds[idx]
                 save_feeds(feeds)
                 print(f"[+] Moved feed #{idx + 1} UP.")
@@ -823,14 +922,13 @@ def manage_feeds_cli():
         elif cmd == "d" and len(parts) > 1 and parts[1].isdigit():
             idx = int(parts[1]) - 1
             if 0 <= idx < len(feeds) - 1:
-                # Swap with next element
                 feeds[idx], feeds[idx + 1] = feeds[idx + 1], feeds[idx]
                 save_feeds(feeds)
                 print(f"[+] Moved feed #{idx + 1} DOWN.")
             else:
                 print("[-] Feed is already at the bottom or invalid index.")
         elif choice.startswith("http"):
-            feeds.append(choice)
+            feeds.append({"url": choice})
             save_feeds(feeds)
             print("[+] New feed added successfully.")
         else:
@@ -841,7 +939,8 @@ def import_opml_cli():
     new_feeds = import_opml(path)
     if new_feeds:
         existing = load_feeds()
-        merged = existing + [f for f in new_feeds if f not in existing]
+        existing_urls = {get_feed_url(f) for f in existing}
+        merged = existing + [{"url": f} for f in new_feeds if f not in existing_urls]
         save_feeds(merged)
 
 def export_opml_cli():
@@ -860,7 +959,7 @@ def settings_cli():
     img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
     toc_mode = config.get("toc_style", "auto").upper()
     
-    print(f"\nCurrent Settings:")
+    print(f"\nCurrent Global Settings:")
     print(f"A. Max Article Age (Days): {config['max_days']}")
     print(f"B. Max Articles Per Feed: {config['max_articles_per_feed']}")
     print(f"C. Export Format ({', '.join(VALID_FORMATS)}): {config['export_format']}")
@@ -906,13 +1005,13 @@ def main_cli_menu():
         img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
         toc_mode = config.get("toc_style", "auto").upper()
         
-        print("\n=== Feed2ebook Manager v0.2.1 ===")
+        print("\n=== Feed2ebook Manager v0.3 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
-        print(f"2. Manage & Reorder Feeds ({len(load_feeds())} currently saved)")
+        print(f"2. Manage & Configure Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
         print("4. Export OPML File")
         print("5. Choose Export Path Location")
-        print(f"6. Toggle Article Images (Current: {img_status})")
+        print(f"6. Toggle Global Article Images (Current: {img_status})")
         print(f"7. Select TOC Mode (Current: {toc_mode})")
         print(f"8. Settings (Format: {config['export_format'].upper()}, Days limit: {config['max_days']})")
         print("9. Run System Diagnostics & Health Check")
@@ -958,3 +1057,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
