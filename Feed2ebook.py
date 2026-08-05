@@ -684,7 +684,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.3 ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.3.0 ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -1005,7 +1005,7 @@ def main_cli_menu():
         img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
         toc_mode = config.get("toc_style", "auto").upper()
         
-        print("\n=== Feed2ebook Manager v0.3 ===")
+        print("\n=== Feed2ebook Manager v0.3.0 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage & Configure Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
