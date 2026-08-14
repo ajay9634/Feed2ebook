@@ -82,11 +82,12 @@ def load_config():
     """Load configuration with default fallback."""
     default_config = {
         "download_path": "/sdcard/Download/Feed2ebook_Articles",
-        "max_days": 7,
-        "max_articles_per_feed": 20,
-        "export_format": "epub",  # Options: 'epub', 'xml', 'html', 'md', 'all'
+        "max_days": 7,                    # 0 or None means unlimited days
+        "max_articles_per_day": 20,       # Number of feeds per day
+        "total_articles_limit": 0,      # unlimited feed as default , per rss feed
+        "export_format": "epub",          # Options: 'epub', 'xml', 'html', 'md', 'all'
         "include_images": True,
-        "toc_style": "auto"       # Default: 'auto'
+        "toc_style": "simple"               # Default: 'simple'
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -605,19 +606,30 @@ def process_feeds():
 
         # Evaluate per-feed settings with global fallbacks
         feed_max_days = get_feed_setting(feed_item, "max_days", config)
-        feed_max_articles = get_feed_setting(feed_item, "max_articles_per_feed", config)
+        feed_max_per_day = get_feed_setting(feed_item, "max_articles_per_day", config)
+        feed_total_limit = get_feed_setting(feed_item, "total_articles_limit", config)
         feed_include_images = get_feed_setting(feed_item, "include_images", config)
 
-        cutoff_date = datetime.now(timezone.utc) - timedelta(days=feed_max_days)
-        print(f"\nFetching Feed: {feed_url} [Max Days: {feed_max_days}, Max Articles: {feed_max_articles}]")
+        days_display = "Unlimited" if not feed_max_days else f"{feed_max_days} days"
+        per_day_display = "Unlimited" if not feed_max_per_day else f"{feed_max_per_day}"
+        total_display = "Unlimited" if not feed_total_limit else f"{feed_total_limit}"
+
+        cutoff_date = None
+        if feed_max_days and feed_max_days > 0:
+            cutoff_date = datetime.now(timezone.utc) - timedelta(days=feed_max_days)
+
+        print(f"\nFetching Feed: {feed_url} [Max Days: {days_display}, Feeds/Day: {per_day_display}, Total Limit: {total_display}]")
         
         try:
             parsed_feed = feedparser.parse(feed_url)
             feed_title = parsed_feed.feed.get("title", feed_url)
             
-            count = 0
+            total_count = 0
+            daily_counts = defaultdict(int)
+
             for entry in parsed_feed.entries:
-                if count >= feed_max_articles:
+                if feed_total_limit and feed_total_limit > 0 and total_count >= feed_total_limit:
+                    print(f" -> Total articles limit reached ({feed_total_limit}) for this feed.")
                     break
                     
                 pub_date = None
@@ -626,8 +638,14 @@ def process_feeds():
                 elif hasattr(entry, "updated_parsed") and entry.updated_parsed:
                     pub_date = datetime.fromtimestamp(time.mktime(entry.updated_parsed), tz=timezone.utc)
                     
-                if pub_date and pub_date < cutoff_date:
+                if cutoff_date and pub_date and pub_date < cutoff_date:
                     continue
+
+                if pub_date and feed_max_per_day and feed_max_per_day > 0:
+                    day_key = pub_date.strftime("%Y-%m-%d")
+                    if daily_counts[day_key] >= feed_max_per_day:
+                        continue
+                    daily_counts[day_key] += 1
                     
                 article_url = entry.link
                 try:
@@ -640,7 +658,7 @@ def process_feeds():
                         "feed_title": feed_title,
                         "html_content": html_content
                     })
-                    count += 1
+                    total_count += 1
                 except Exception as e:
                     print(f"    [-] Error extracting article HTML: {e}")
         except Exception as e:
@@ -684,7 +702,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.3.0 ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.4.0 ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -737,6 +755,7 @@ def curses_tui_loop(stdscr):
         feeds = load_feeds()
         img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
         toc_mode = config.get("toc_style", "auto").upper()
+        days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']}d"
         
         menu_items = [
             (f"Run Processing Pipeline (Target: {config['export_format'].upper()})", 3),
@@ -746,7 +765,7 @@ def curses_tui_loop(stdscr):
             (f"Select Export Directory Path", 4),
             (f"Toggle Global Article Images (Current: {img_status})", 4),
             (f"Change Table of Contents Mode (Current: {toc_mode})", 4),
-            (f"Configure Settings (Format: {config['export_format'].upper()}, Days: {config['max_days']})", 4),
+            (f"Configure Settings (Format: {config['export_format'].upper()}, Days: {days_str})", 4),
             ("Run System Diagnostics & Health Check", 4),
             ("Switch to Classic CLI Menu", 1),
             ("Exit Program", 5)
@@ -794,13 +813,31 @@ def curses_tui_loop(stdscr):
             return "cli"
 
 def configure_single_feed_cli(feeds, idx, global_config):
-    """Submenu to manage individual settings (limit, max_days, include_images) per feed."""
+    """Submenu to manage individual settings (limits, max_days, include_images) per feed."""
     feed = feeds[idx]
     url = get_feed_url(feed)
 
     while True:
-        days_str = f"{feed.get('max_days')} days" if "max_days" in feed and feed["max_days"] is not None else f"Global Default ({global_config['max_days']} days)"
-        limit_str = f"{feed.get('max_articles_per_feed')} articles" if "max_articles_per_feed" in feed and feed["max_articles_per_feed"] is not None else f"Global Default ({global_config['max_articles_per_feed']})"
+        days_val = feed.get("max_days")
+        if days_val is not None:
+            days_str = "Unlimited" if days_val == 0 else f"{days_val} days"
+        else:
+            g_days = global_config.get('max_days')
+            days_str = f"Global Default ({'Unlimited' if not g_days else str(g_days) + ' days'})"
+
+        day_limit_val = feed.get("max_articles_per_day")
+        if day_limit_val is not None:
+            day_limit_str = "Unlimited" if day_limit_val == 0 else f"{day_limit_val} articles/day"
+        else:
+            g_dl = global_config.get('max_articles_per_day')
+            day_limit_str = f"Global Default ({'Unlimited' if not g_dl else str(g_dl) + ' articles/day'})"
+
+        tot_limit_val = feed.get("total_articles_limit")
+        if tot_limit_val is not None:
+            tot_limit_str = "Unlimited" if tot_limit_val == 0 else f"{tot_limit_val} total articles"
+        else:
+            g_tl = global_config.get('total_articles_limit')
+            tot_limit_str = f"Global Default ({'Unlimited' if not g_tl else str(g_tl) + ' total articles'})"
         
         if "include_images" in feed and feed["include_images"] is not None:
             img_str = "ENABLED" if feed["include_images"] else "DISABLED"
@@ -811,28 +848,42 @@ def configure_single_feed_cli(feeds, idx, global_config):
         print(f" Config Settings for Feed #{idx + 1}")
         print(f" URL: {url}")
         print("-----------------------------------------")
-        print(f"  1. Max Article Age (Days)  : {days_str}")
-        print(f"  2. Max Articles Limit      : {limit_str}")
-        print(f"  3. Include Images Override : {img_str}")
-        print("  4. Reset Feed to Global Defaults")
+        print(f"  1. Max Article Age (Days)     : {days_str}")
+        print(f"  2. Max Articles Per Day       : {day_limit_str}")
+        print(f"  3. Total Articles Limit       : {tot_limit_str}")
+        print(f"  4. Include Images Override    : {img_str}")
+        print("  5. Reset Feed to Global Defaults")
         print("  0. Save & Return to Feed Manager")
 
-        choice = input("\nChoose setting to modify (0-4): ").strip()
+        choice = input("\nChoose setting to modify (0-5): ").strip()
         if choice == "1":
-            val = input("Enter custom max days (or press Enter to reset to global): ").strip()
-            if val.isdigit():
+            val = input("Enter max days (0 or 'unlimited' for Unlimited, Enter to reset to global): ").strip().lower()
+            if val in ["0", "unlimited", "u"]:
+                feed["max_days"] = 0
+            elif val.isdigit():
                 feed["max_days"] = int(val)
             elif val == "":
                 feed.pop("max_days", None)
             save_feeds(feeds)
         elif choice == "2":
-            val = input("Enter custom max articles limit (or press Enter to reset to global): ").strip()
-            if val.isdigit():
-                feed["max_articles_per_feed"] = int(val)
+            val = input("Enter max articles per day (0 or 'unlimited' for Unlimited, Enter to reset to global): ").strip().lower()
+            if val in ["0", "unlimited", "u"]:
+                feed["max_articles_per_day"] = 0
+            elif val.isdigit():
+                feed["max_articles_per_day"] = int(val)
             elif val == "":
-                feed.pop("max_articles_per_feed", None)
+                feed.pop("max_articles_per_day", None)
             save_feeds(feeds)
         elif choice == "3":
+            val = input("Enter total articles limit (0 or 'unlimited' for Unlimited, Enter to reset to global): ").strip().lower()
+            if val in ["0", "unlimited", "u"]:
+                feed["total_articles_limit"] = 0
+            elif val.isdigit():
+                feed["total_articles_limit"] = int(val)
+            elif val == "":
+                feed.pop("total_articles_limit", None)
+            save_feeds(feeds)
+        elif choice == "4":
             current = feed.get("include_images")
             if current is None:
                 feed["include_images"] = False
@@ -841,7 +892,7 @@ def configure_single_feed_cli(feeds, idx, global_config):
             else:
                 feed.pop("include_images", None)
             save_feeds(feeds)
-        elif choice == "4":
+        elif choice == "5":
             feeds[idx] = {"url": url}
             feed = feeds[idx]
             save_feeds(feeds)
@@ -865,9 +916,11 @@ def manage_feeds_cli():
                 opts = []
                 if isinstance(f, dict):
                     if "max_days" in f and f["max_days"] is not None:
-                        opts.append(f"Days: {f['max_days']}")
-                    if "max_articles_per_feed" in f and f["max_articles_per_feed"] is not None:
-                        opts.append(f"Limit: {f['max_articles_per_feed']}")
+                        opts.append(f"Days: {'Unlimited' if f['max_days'] == 0 else f['max_days']}")
+                    if "max_articles_per_day" in f and f["max_articles_per_day"] is not None:
+                        opts.append(f"Per Day: {'Unlimited' if f['max_articles_per_day'] == 0 else f['max_articles_per_day']}")
+                    if "total_articles_limit" in f and f["total_articles_limit"] is not None:
+                        opts.append(f"Total: {'Unlimited' if f['total_articles_limit'] == 0 else f['total_articles_limit']}")
                     if "include_images" in f and f["include_images"] is not None:
                         opts.append(f"Images: {'ON' if f['include_images'] else 'OFF'}")
                 
@@ -876,7 +929,7 @@ def manage_feeds_cli():
         
         print("\nCommands:")
         print("  [URL]           -> Add a new feed URL")
-        print("  [s <number>]    -> Configure per-feed settings (limit, days, images)")
+        print("  [s <number>]    -> Configure per-feed settings (limits, days, images)")
         print("  [del <number>]  -> Delete feed by number (e.g., del 2)")
         print("  [u <number>]    -> Move feed UP (e.g., u 3)")
         print("  [d <number>]    -> Move feed DOWN (e.g., d 1)")
@@ -958,24 +1011,43 @@ def settings_cli():
     config = load_config()
     img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
     toc_mode = config.get("toc_style", "auto").upper()
+    days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']} days"
+    per_day_str = "Unlimited" if not config.get("max_articles_per_day") else f"{config['max_articles_per_day']} articles/day"
+    total_str = "Unlimited" if not config.get("total_articles_limit") else f"{config['total_articles_limit']} articles"
     
     print(f"\nCurrent Global Settings:")
-    print(f"A. Max Article Age (Days): {config['max_days']}")
-    print(f"B. Max Articles Per Feed: {config['max_articles_per_feed']}")
-    print(f"C. Export Format ({', '.join(VALID_FORMATS)}): {config['export_format']}")
-    print(f"D. Download Path: {config['download_path']}")
-    print(f"E. Include Article Images: {img_status}")
-    print(f"F. Choose Output Path (Presets Menu)")
-    print(f"G. Table of Contents Mode: {toc_mode}")
+    print(f"A. Max Article Age (Days)    : {days_str}")
+    print(f"B. Max Articles Per Day      : {per_day_str}")
+    print(f"C. Total Articles Limit      : {total_str}")
+    print(f"D. Export Format ({', '.join(VALID_FORMATS)}): {config['export_format']}")
+    print(f"E. Download Path             : {config['download_path']}")
+    print(f"F. Include Article Images    : {img_status}")
+    print(f"G. Choose Output Path (Presets Menu)")
+    print(f"H. Table of Contents Mode    : {toc_mode}")
     
-    field = input("Choose setting to modify (A/B/C/D/E/F/G) or press Enter to return: ").strip().upper()
+    field = input("Choose setting to modify (A-H) or press Enter to return: ").strip().upper()
     if field == "A":
-        config["max_days"] = int(input("Enter max days: ").strip())
+        val = input("Enter max days (type 0 or 'unlimited' for Unlimited): ").strip().lower()
+        if val in ["0", "unlimited", "u"]:
+            config["max_days"] = 0
+        elif val.isdigit():
+            config["max_days"] = int(val)
         save_config(config)
     elif field == "B":
-        config["max_articles_per_feed"] = int(input("Enter max articles per feed: ").strip())
+        val = input("Enter max articles per day (type 0 or 'unlimited' for Unlimited): ").strip().lower()
+        if val in ["0", "unlimited", "u"]:
+            config["max_articles_per_day"] = 0
+        elif val.isdigit():
+            config["max_articles_per_day"] = int(val)
         save_config(config)
     elif field == "C":
+        val = input("Enter total articles limit per feed (type 0 or 'unlimited' for Unlimited): ").strip().lower()
+        if val in ["0", "unlimited", "u"]:
+            config["total_articles_limit"] = 0
+        elif val.isdigit():
+            config["total_articles_limit"] = int(val)
+        save_config(config)
+    elif field == "D":
         print(f"Available formats: {', '.join(VALID_FORMATS)}")
         fmt = input("Enter format choice: ").strip().lower()
         if fmt in VALID_FORMATS:
@@ -985,18 +1057,18 @@ def settings_cli():
             save_config(config)
         else:
             print("[-] Invalid format option.")
-    elif field == "D":
+    elif field == "E":
         new_path = input("Enter new path: ").strip()
         if new_path:
             config["download_path"] = new_path
             save_config(config)
-    elif field == "E":
+    elif field == "F":
         config["include_images"] = not config.get("include_images", True)
         save_config(config)
         print(f"[+] Images setting updated to: {config['include_images']}")
-    elif field == "F":
-        choose_export_path_cli(config)
     elif field == "G":
+        choose_export_path_cli(config)
+    elif field == "H":
         select_toc_style_cli(config)
 
 def main_cli_menu():
@@ -1004,8 +1076,9 @@ def main_cli_menu():
         config = load_config()
         img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
         toc_mode = config.get("toc_style", "auto").upper()
+        days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']}d"
         
-        print("\n=== Feed2ebook Manager v0.3.0 ===")
+        print("\n=== Feed2ebook Manager v0.4.0 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage & Configure Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
@@ -1013,7 +1086,7 @@ def main_cli_menu():
         print("5. Choose Export Path Location")
         print(f"6. Toggle Global Article Images (Current: {img_status})")
         print(f"7. Select TOC Mode (Current: {toc_mode})")
-        print(f"8. Settings (Format: {config['export_format'].upper()}, Days limit: {config['max_days']})")
+        print(f"8. Settings (Format: {config['export_format'].upper()}, Days: {days_str})")
         print("9. Run System Diagnostics & Health Check")
         print("10. Launch TUI Graphical Menu")
         print("11. Exit")
@@ -1057,4 +1130,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
