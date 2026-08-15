@@ -46,7 +46,7 @@ curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install_fee
 ```
 5. After installation, launch the app anytime by typing: `feed2ebook`
 ---
-## Examples
+## Samples
 
 - **Sample Subscriptions:** [subscriptions.opml](./example/subscriptions.opml)
 - **Generated EPUB Digest:** [Feed2ebook_Digest_2026_07_31_07_53.epub](./example/Feed2ebook_Digest_2026_07_31_07_53.epub)
