@@ -21,7 +21,8 @@ CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.j
 FEEDS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "feeds.json")
 
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8"
 }
 
 PRESET_PATHS = {
@@ -84,10 +85,10 @@ def load_config():
         "download_path": "/sdcard/Download/Feed2ebook_Articles",
         "max_days": 7,                    # 0 or None means unlimited days
         "max_articles_per_day": 20,       # Number of feeds per day
-        "total_articles_limit": 0,      # unlimited feed as default , per rss feed
+        "total_articles_limit": 0,        # unlimited feed as default , per rss feed
         "export_format": "epub",          # Options: 'epub', 'xml', 'html', 'md', 'all'
         "include_images": True,
-        "toc_style": "simple"               # Default: 'simple'
+        "toc_style": "simple"             # Default: 'simple'
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -278,7 +279,54 @@ def export_opml(feeds, filepath):
 def sanitize_filename(name):
     return "".join([c if c.isalnum() else "_" for c in name])[:50]
 
-def extract_full_html_readability(url, include_images=True):
+def extract_media_urls_from_entry(entry):
+    """Extracts explicit media/image URLs directly from RSS feed item entries."""
+    urls = []
+    if not entry:
+        return urls
+
+    # 1. Enclosures
+    if hasattr(entry, 'enclosures'):
+        for enc in entry.enclosures:
+            if getattr(enc, 'type', '').startswith('image/') or getattr(enc, 'href', '').split('?')[0].lower().endswith(('jpg', 'jpeg', 'png', 'gif', 'webp', 'avif')):
+                if 'href' in enc and enc.href not in urls:
+                    urls.append(enc.href)
+    # 2. Media Content & Thumbnails
+    if hasattr(entry, 'media_content'):
+        for media in entry.media_content:
+            if 'url' in media and (media.get('medium') == 'image' or media.get('type', '').startswith('image/')):
+                if media['url'] not in urls:
+                    urls.append(media['url'])
+    if hasattr(entry, 'media_thumbnail'):
+        for thumb in entry.media_thumbnail:
+            if 'url' in thumb and thumb['url'] not in urls:
+                urls.append(thumb['url'])
+    return urls
+
+def parse_srcset(srcset_str):
+    """Parses srcset attribute string and returns the URL with highest resolution descriptor."""
+    candidates = []
+    for item in srcset_str.split(','):
+        parts = item.strip().split()
+        if not parts:
+            continue
+        url = parts[0]
+        size = 0
+        if len(parts) > 1:
+            descriptor = parts[1].lower()
+            if descriptor.endswith('w'):
+                try: size = int(descriptor[:-1])
+                except ValueError: pass
+            elif descriptor.endswith('x'):
+                try: size = int(float(descriptor[:-1]) * 1000)
+                except ValueError: pass
+        candidates.append((size, url))
+    if candidates:
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        return candidates[0][1]
+    return None
+
+def extract_full_html_readability(url, include_images=True, entry=None):
     response = requests.get(url, headers=HEADERS, timeout=15)
     response.raise_for_status()
     
@@ -286,6 +334,17 @@ def extract_full_html_readability(url, include_images=True):
     clean_html = doc.summary()
     
     soup = BeautifulSoup(clean_html, "html.parser")
+
+    # If readability extracted HTML lacks images, prepend RSS entry media links if available
+    if include_images and entry:
+        rss_images = extract_media_urls_from_entry(entry)
+        for img_url in rss_images:
+            if not soup.find("img", src=img_url):
+                img_tag = soup.new_tag("img", src=img_url)
+                if soup.body:
+                    soup.body.insert(0, img_tag)
+                else:
+                    soup.insert(0, img_tag)
     
     for tag in soup.find_all(True):
         if tag.name in ["script", "style", "iframe", "form", "button", "nav", "footer"]:
@@ -293,7 +352,9 @@ def extract_full_html_readability(url, include_images=True):
         elif tag.name == "img" and not include_images:
             tag.decompose()
         elif getattr(tag, 'attrs', None):
-            tag.attrs = {k: v for k, v in tag.attrs.items() if k in ["href", "src", "alt", "title"]}
+            # Preserve lazy loading and srcset attributes for image processing step
+            allowed_attrs = ["href", "src", "alt", "title", "data-src", "data-original", "data-lazy-src", "data-url", "data-orig-file", "srcset"]
+            tag.attrs = {k: v for k, v in tag.attrs.items() if k in allowed_attrs}
             
     return doc.title(), str(soup)
 
@@ -302,30 +363,85 @@ def process_and_embed_images(html_content, book, base_url=""):
     soup = BeautifulSoup(html_content, "html.parser")
     images = soup.find_all("img")
     
+    req_headers = HEADERS.copy()
+    if base_url:
+        req_headers["Referer"] = base_url
+
+    url_hash = abs(hash(base_url)) % 100000
+
     for idx, img in enumerate(images):
-        src = img.get("src")
+        src = None
+
+        # 1. Fallback to common lazy-loading dataset attributes
+        for attr in ["data-src", "data-original", "data-lazy-src", "data-url", "data-orig-file"]:
+            if img.get(attr):
+                src = img.get(attr)
+                break
+
+        # 2. Extract best image URL from srcset if available
+        if not src and img.get("srcset"):
+            src = parse_srcset(img.get("srcset"))
+
+        # 3. Check parent <picture> sources if present
+        if not src and img.parent and img.parent.name == "picture":
+            for source in img.parent.find_all("source"):
+                if source.get("srcset"):
+                    src = parse_srcset(source.get("srcset"))
+                    if src: break
+                elif source.get("src"):
+                    src = source.get("src")
+                    if src: break
+
+        # 4. Standard src fallback
         if not src:
-            continue
+            src = img.get("src")
         
+        if not src or src.startswith("data:"):
+            continue
+
         full_img_url = urllib.parse.urljoin(base_url, src)
         try:
-            img_res = requests.get(full_img_url, headers=HEADERS, timeout=10)
+            img_res = requests.get(full_img_url, headers=req_headers, timeout=10)
             if img_res.status_code == 200:
-                ext = full_img_url.split(".")[-1].lower().split("?")[0]
-                if ext not in ["jpg", "jpeg", "png", "gif", "webp"]:
+                # Detect extension from Content-Type or fallback to URL extension
+                content_type = img_res.headers.get("Content-Type", "").lower()
+                ext = None
+                if "image/jpeg" in content_type or "image/jpg" in content_type:
                     ext = "jpg"
-                    
+                elif "image/png" in content_type:
+                    ext = "png"
+                elif "image/gif" in content_type:
+                    ext = "gif"
+                elif "image/webp" in content_type:
+                    ext = "webp"
+                elif "image/avif" in content_type:
+                    ext = "avif"
+                elif "image/svg" in content_type:
+                    ext = "svg"
+                
+                if not ext:
+                    path_ext = full_img_url.split(".")[-1].lower().split("?")[0].split("#")[0]
+                    if path_ext in ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"]:
+                        ext = "jpeg" if path_ext == "jpg" else path_ext
+                    else:
+                        ext = "jpg"
+                
                 media_type = f"image/{'jpeg' if ext in ['jpg', 'jpeg'] else ext}"
-                image_filename = f"images/img_{int(time.time())}_{idx}.{ext}"
+                image_filename = f"images/img_{url_hash}_{idx}_{int(time.time())}.{ext}"
                 
                 epub_img = epub.EpubItem(
-                    uid=f"img_{int(time.time())}_{idx}",
+                    uid=f"img_{url_hash}_{idx}_{int(time.time())}",
                     file_name=image_filename,
                     media_type=media_type,
                     content=img_res.content
                 )
                 book.add_item(epub_img)
                 img["src"] = image_filename
+                
+                # Clean up lazy loading attributes from the tag
+                for attr in ["data-src", "data-original", "data-lazy-src", "data-url", "data-orig-file", "srcset"]:
+                    if attr in img.attrs:
+                        del img.attrs[attr]
         except Exception:
             pass
 
@@ -650,7 +766,7 @@ def process_feeds():
                 article_url = entry.link
                 try:
                     print(f" -> Downloading HTML: {entry.get('title', article_url)}")
-                    title, html_content = extract_full_html_readability(article_url, include_images=feed_include_images)
+                    title, html_content = extract_full_html_readability(article_url, include_images=feed_include_images, entry=entry)
                     
                     all_collected_articles.append({
                         "title": title or entry.get("title", "Untitled"),
@@ -702,7 +818,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.4.0 ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.4.1 ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -1078,7 +1194,7 @@ def main_cli_menu():
         toc_mode = config.get("toc_style", "auto").upper()
         days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']}d"
         
-        print("\n=== Feed2ebook Manager v0.4.0 ===")
+        print("\n=== Feed2ebook Manager v0.4.1 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage & Configure Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
