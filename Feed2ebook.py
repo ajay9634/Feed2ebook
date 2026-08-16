@@ -10,6 +10,7 @@ import traceback
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
+import io
 
 import feedparser
 import requests
@@ -35,15 +36,36 @@ VALID_FORMATS = ["epub", "xml", "html", "md", "all"]
 TOC_MODES = ["auto", "disabled", "simple", "advanced"]
 
 def check_and_install_package(package_name, import_name=None):
-    """Checks if a module is installed; prompts user to install via pip if missing."""
+    """Checks if a module is installed; prompts user to install via pkg (Termux) or pip if missing."""
     import_module = import_name or package_name
     if importlib.util.find_spec(import_module) is not None:
         return True
 
-    print(f"\n[!] Required package '{package_name}' is not installed for this export format.")
-    choice = input(f"Would you like to install '{package_name}' now using pip? (y/n): ").strip().lower()
+    print(f"\n[!] Required package '{package_name}' is not installed.")
+    choice = input(f"Would you like to install '{package_name}' now? (y/n): ").strip().lower()
+    
     if choice == 'y':
         print(f"[+] Installing '{package_name}'...")
+        is_termux = "com.termux" in sys.executable or os.path.exists("/data/data/com.termux")
+
+        if is_termux and package_name.lower() == "pillow":
+            try:
+                print("[+] Termux detected. Installing pre-compiled 'python-pillow' via pkg...")
+                subprocess.check_call(["pkg", "install", "python-pillow", "-y"])
+                print(f"[+] Package '{package_name}' installed successfully!")
+                return True
+            except Exception as e:
+                print(f"[-] 'pkg install python-pillow' failed: {e}")
+                print("[+] Attempting to install build tools and run pip...")
+                try:
+                    subprocess.check_call(["pkg", "install", "libjpeg-turbo", "zlib", "clang", "make", "-y"])
+                    subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
+                    print(f"[+] Package '{package_name}' installed successfully!")
+                    return True
+                except Exception as pip_err:
+                    print(f"[-] Failed to install '{package_name}': {pip_err}")
+                    return False
+
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "install", package_name])
             print(f"[+] Package '{package_name}' installed successfully!")
@@ -52,8 +74,12 @@ def check_and_install_package(package_name, import_name=None):
             print(f"[-] Failed to install '{package_name}': {e}")
             return False
     else:
-        print(f"[-] Skipped installation of '{package_name}'. Export for this format cannot proceed.")
+        print(f"[-] Skipped installation of '{package_name}'.")
         return False
+
+def check_image_dependencies():
+    """Verifies that Pillow (PIL) is available for image processing."""
+    return check_and_install_package("Pillow", import_name="PIL")
 
 def test_path_writable(path):
     """Tests if a given path is writable on Android/Termux."""
@@ -88,7 +114,9 @@ def load_config():
         "total_articles_limit": 0,        # unlimited feed as default , per rss feed
         "export_format": "epub",          # Options: 'epub', 'xml', 'html', 'md', 'all'
         "include_images": True,
-        "toc_style": "simple"             # Default: 'simple'
+        "toc_style": "simple",            # Default: 'simple'
+        "image_quality": 60,              # Compression quality (1-95)
+        "max_image_width": 800            # Maximum width in pixels
     }
     if os.path.exists(CONFIG_FILE):
         try:
@@ -190,13 +218,19 @@ def run_diagnostics():
     target_path = config["download_path"]
 
     print(f"\n[1/4] Checking Core Python Libraries...")
-    libs = ["requests", "bs4", "feedparser", "readability", "ebooklib"]
-    for lib in libs:
-        try:
-            __import__(lib)
-            print(f"  [+] {lib}: Installed")
-        except ImportError:
-            print(f"  [-] {lib}: MISSING! (Install using: pip install {lib})")
+    libs = [
+        ("requests", "requests"),
+        ("bs4", "bs4"),
+        ("feedparser", "feedparser"),
+        ("readability", "readability"),
+        ("ebooklib", "ebooklib"),
+        ("Pillow", "PIL")
+    ]
+    for pkg_name, import_name in libs:
+        if importlib.util.find_spec(import_name) is not None:
+            print(f"  [+] {pkg_name} ({import_name}): Installed")
+        else:
+            print(f"  [-] {pkg_name}: MISSING! (Install using: pip install {pkg_name})")
 
     print(f"\n[2/4] Checking Markdown Support Library...")
     installed = importlib.util.find_spec("markdownify") is not None
@@ -285,13 +319,11 @@ def extract_media_urls_from_entry(entry):
     if not entry:
         return urls
 
-    # 1. Enclosures
     if hasattr(entry, 'enclosures'):
         for enc in entry.enclosures:
             if getattr(enc, 'type', '').startswith('image/') or getattr(enc, 'href', '').split('?')[0].lower().endswith(('jpg', 'jpeg', 'png', 'gif', 'webp', 'avif')):
                 if 'href' in enc and enc.href not in urls:
                     urls.append(enc.href)
-    # 2. Media Content & Thumbnails
     if hasattr(entry, 'media_content'):
         for media in entry.media_content:
             if 'url' in media and (media.get('medium') == 'image' or media.get('type', '').startswith('image/')):
@@ -335,7 +367,6 @@ def extract_full_html_readability(url, include_images=True, entry=None):
     
     soup = BeautifulSoup(clean_html, "html.parser")
 
-    # If readability extracted HTML lacks images, prepend RSS entry media links if available
     if include_images and entry:
         rss_images = extract_media_urls_from_entry(entry)
         for img_url in rss_images:
@@ -352,14 +383,20 @@ def extract_full_html_readability(url, include_images=True, entry=None):
         elif tag.name == "img" and not include_images:
             tag.decompose()
         elif getattr(tag, 'attrs', None):
-            # Preserve lazy loading and srcset attributes for image processing step
             allowed_attrs = ["href", "src", "alt", "title", "data-src", "data-original", "data-lazy-src", "data-url", "data-orig-file", "srcset"]
             tag.attrs = {k: v for k, v in tag.attrs.items() if k in allowed_attrs}
             
     return doc.title(), str(soup)
 
-def process_and_embed_images(html_content, book, base_url=""):
-    """Downloads images in HTML and embeds them inside EPUB document structure."""
+def process_and_embed_images(html_content, book, base_url="", quality=60, max_width=800):
+    """Downloads images in HTML, resizes/compresses them, and embeds inside EPUB."""
+    try:
+        from PIL import Image
+    except ImportError:
+        if not check_image_dependencies():
+            return html_content
+        from PIL import Image
+
     soup = BeautifulSoup(html_content, "html.parser")
     images = soup.find_all("img")
     
@@ -372,17 +409,14 @@ def process_and_embed_images(html_content, book, base_url=""):
     for idx, img in enumerate(images):
         src = None
 
-        # 1. Fallback to common lazy-loading dataset attributes
         for attr in ["data-src", "data-original", "data-lazy-src", "data-url", "data-orig-file"]:
             if img.get(attr):
                 src = img.get(attr)
                 break
 
-        # 2. Extract best image URL from srcset if available
         if not src and img.get("srcset"):
             src = parse_srcset(img.get("srcset"))
 
-        # 3. Check parent <picture> sources if present
         if not src and img.parent and img.parent.name == "picture":
             for source in img.parent.find_all("source"):
                 if source.get("srcset"):
@@ -392,7 +426,6 @@ def process_and_embed_images(html_content, book, base_url=""):
                     src = source.get("src")
                     if src: break
 
-        # 4. Standard src fallback
         if not src:
             src = img.get("src")
         
@@ -403,42 +436,39 @@ def process_and_embed_images(html_content, book, base_url=""):
         try:
             img_res = requests.get(full_img_url, headers=req_headers, timeout=10)
             if img_res.status_code == 200:
-                # Detect extension from Content-Type or fallback to URL extension
-                content_type = img_res.headers.get("Content-Type", "").lower()
-                ext = None
-                if "image/jpeg" in content_type or "image/jpg" in content_type:
-                    ext = "jpg"
-                elif "image/png" in content_type:
-                    ext = "png"
-                elif "image/gif" in content_type:
-                    ext = "gif"
-                elif "image/webp" in content_type:
-                    ext = "webp"
-                elif "image/avif" in content_type:
-                    ext = "avif"
-                elif "image/svg" in content_type:
-                    ext = "svg"
+                raw_bytes = img_res.content
                 
-                if not ext:
-                    path_ext = full_img_url.split(".")[-1].lower().split("?")[0].split("#")[0]
-                    if path_ext in ["jpg", "jpeg", "png", "gif", "webp", "avif", "svg"]:
-                        ext = "jpeg" if path_ext == "jpg" else path_ext
-                    else:
+                try:
+                    with Image.open(io.BytesIO(raw_bytes)) as pil_img:
+                        if pil_img.mode in ("RGBA", "P"):
+                            pil_img = pil_img.convert("RGB")
+                        
+                        if pil_img.width > max_width:
+                            w_percent = max_width / float(pil_img.width)
+                            h_size = int(float(pil_img.height) * float(w_percent))
+                            pil_img = pil_img.resize((max_width, h_size), Image.Resampling.LANCZOS)
+
+                        out_buffer = io.BytesIO()
+                        pil_img.save(out_buffer, format="JPEG", quality=quality, optimize=True)
+                        processed_bytes = out_buffer.getvalue()
                         ext = "jpg"
-                
-                media_type = f"image/{'jpeg' if ext in ['jpg', 'jpeg'] else ext}"
+                        media_type = "image/jpeg"
+                except Exception:
+                    processed_bytes = raw_bytes
+                    ext = "jpg"
+                    media_type = "image/jpeg"
+
                 image_filename = f"images/img_{url_hash}_{idx}_{int(time.time())}.{ext}"
                 
                 epub_img = epub.EpubItem(
                     uid=f"img_{url_hash}_{idx}_{int(time.time())}",
                     file_name=image_filename,
                     media_type=media_type,
-                    content=img_res.content
+                    content=processed_bytes
                 )
                 book.add_item(epub_img)
                 img["src"] = image_filename
                 
-                # Clean up lazy loading attributes from the tag
                 for attr in ["data-src", "data-original", "data-lazy-src", "data-url", "data-orig-file", "srcset"]:
                     if attr in img.attrs:
                         del img.attrs[attr]
@@ -448,7 +478,6 @@ def process_and_embed_images(html_content, book, base_url=""):
     return str(soup)
 
 def group_articles_by_feed(articles_data):
-    """Groups flat article list into a dict: {feed_title: [article_dict, ...]} preserving order."""
     grouped = defaultdict(list)
     for article in articles_data:
         grouped[article['feed_title']].append(article)
@@ -510,7 +539,7 @@ def generate_toc_html(grouped_articles, is_epub=False, mode="auto"):
     toc_html += "</div><hr style='margin: 20px 0;'/>"
     return toc_html
 
-def build_epub(articles_data, output_dir, base_filename, include_images=True, toc_style="auto"):
+def build_epub(articles_data, output_dir, base_filename, include_images=True, toc_style="auto", quality=60, max_width=800):
     print(f"[+] Building EPUB file with {len(articles_data)} article(s) (TOC Style: {toc_style.upper()})...")
     try:
         output_dir = ensure_directory_exists(output_dir)
@@ -544,7 +573,7 @@ def build_epub(articles_data, output_dir, base_filename, include_images=True, to
             for item in items:
                 html = item['html_content']
                 if include_images:
-                    html = process_and_embed_images(html, book, base_url=item['url'])
+                    html = process_and_embed_images(html, book, base_url=item['url'], quality=quality, max_width=max_width)
 
                 c = epub.EpubHtml(title=item['title'], file_name=item['epub_filename'], lang='en')
                 c.content = f"""
@@ -712,6 +741,11 @@ def process_feeds():
         print("[-] No RSS feeds found. Add them manually or import via OPML first.")
         return
 
+    if config.get("include_images", True):
+        if not check_image_dependencies():
+            print("[-] Image dependencies missing. Disabling images for this run.")
+            config["include_images"] = False
+
     print(f"\n[+] Processing {len(feeds)} feed(s) with custom per-feed or global settings...")
     all_collected_articles = []
 
@@ -720,11 +754,14 @@ def process_feeds():
         if not feed_url:
             continue
 
-        # Evaluate per-feed settings with global fallbacks
         feed_max_days = get_feed_setting(feed_item, "max_days", config)
         feed_max_per_day = get_feed_setting(feed_item, "max_articles_per_day", config)
         feed_total_limit = get_feed_setting(feed_item, "total_articles_limit", config)
         feed_include_images = get_feed_setting(feed_item, "include_images", config)
+
+        if feed_include_images:
+            if not check_image_dependencies():
+                feed_include_images = False
 
         days_display = "Unlimited" if not feed_max_days else f"{feed_max_days} days"
         per_day_display = "Unlimited" if not feed_max_per_day else f"{feed_max_per_day}"
@@ -789,9 +826,11 @@ def process_feeds():
     fmt = config["export_format"].lower()
     inc_img = config.get("include_images", True)
     toc_style = config.get("toc_style", "auto")
+    quality = config.get("image_quality", 60)
+    max_width = config.get("max_image_width", 800)
 
     if fmt == "epub":
-        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style)
+        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style, quality=quality, max_width=max_width)
     elif fmt == "html":
         build_html(all_collected_articles, config["download_path"], base_title, toc_style=toc_style)
     elif fmt == "md":
@@ -800,7 +839,7 @@ def process_feeds():
         xml_filepath = os.path.join(config["download_path"], f"{sanitize_filename(base_title)}.xml")
         export_rss_xml(all_collected_articles, xml_filepath, base_title)
     elif fmt == "all":
-        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style)
+        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style, quality=quality, max_width=max_width)
         build_html(all_collected_articles, config["download_path"], base_title, toc_style=toc_style)
         build_markdown(all_collected_articles, config["download_path"], base_title, toc_style=toc_style)
         xml_filepath = os.path.join(config["download_path"], f"{sanitize_filename(base_title)}.xml")
@@ -818,7 +857,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.4.1 ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.4.2 ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -860,6 +899,19 @@ def select_toc_style_cli(config):
         config["toc_style"] = mapping[choice]
         save_config(config)
         print(f"\n[+] Table of Contents style set to: {config['toc_style'].upper()}")
+
+def handle_toggle_images(config):
+    """Safely handles toggling image settings by checking dependencies first."""
+    target_state = not config.get("include_images", True)
+    if target_state:
+        if not check_image_dependencies():
+            print("[-] Cannot enable article images without Pillow installed. Setting remains DISABLED.")
+            return False
+    
+    config["include_images"] = target_state
+    save_config(config)
+    print(f"\n[+] Image fetching option is now: {'ENABLED' if target_state else 'DISABLED'}")
+    return True
 
 def curses_tui_loop(stdscr):
     curses.curs_set(0)
@@ -908,9 +960,7 @@ def curses_tui_loop(stdscr):
             elif current_row == 4:
                 choose_export_path_cli(config)
             elif current_row == 5:
-                config["include_images"] = not config.get("include_images", True)
-                save_config(config)
-                print(f"\n[+] Image fetching option is now: {'ENABLED' if config['include_images'] else 'DISABLED'}")
+                handle_toggle_images(config)
             elif current_row == 6:
                 select_toc_style_cli(config)
             elif current_row == 7:
@@ -1001,10 +1051,12 @@ def configure_single_feed_cli(feeds, idx, global_config):
             save_feeds(feeds)
         elif choice == "4":
             current = feed.get("include_images")
-            if current is None:
-                feed["include_images"] = False
-            elif current is False:
-                feed["include_images"] = True
+            if current is None or current is False:
+                if check_image_dependencies():
+                    feed["include_images"] = True
+                else:
+                    print("[-] Missing Pillow library. Image override set to DISABLED.")
+                    feed["include_images"] = False
             else:
                 feed.pop("include_images", None)
             save_feeds(feeds)
@@ -1130,6 +1182,8 @@ def settings_cli():
     days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']} days"
     per_day_str = "Unlimited" if not config.get("max_articles_per_day") else f"{config['max_articles_per_day']} articles/day"
     total_str = "Unlimited" if not config.get("total_articles_limit") else f"{config['total_articles_limit']} articles"
+    quality_str = f"{config.get('image_quality', 60)}%"
+    max_width_str = f"{config.get('max_image_width', 800)}px"
     
     print(f"\nCurrent Global Settings:")
     print(f"A. Max Article Age (Days)    : {days_str}")
@@ -1140,8 +1194,10 @@ def settings_cli():
     print(f"F. Include Article Images    : {img_status}")
     print(f"G. Choose Output Path (Presets Menu)")
     print(f"H. Table of Contents Mode    : {toc_mode}")
+    print(f"I. Image Compression Quality : {quality_str}")
+    print(f"J. Max Image Width           : {max_width_str}")
     
-    field = input("Choose setting to modify (A-H) or press Enter to return: ").strip().upper()
+    field = input("Choose setting to modify (A-J) or press Enter to return: ").strip().upper()
     if field == "A":
         val = input("Enter max days (type 0 or 'unlimited' for Unlimited): ").strip().lower()
         if val in ["0", "unlimited", "u"]:
@@ -1179,13 +1235,27 @@ def settings_cli():
             config["download_path"] = new_path
             save_config(config)
     elif field == "F":
-        config["include_images"] = not config.get("include_images", True)
-        save_config(config)
-        print(f"[+] Images setting updated to: {config['include_images']}")
+        handle_toggle_images(config)
     elif field == "G":
         choose_export_path_cli(config)
     elif field == "H":
         select_toc_style_cli(config)
+    elif field == "I":
+        if not check_image_dependencies():
+            print("[-] Cannot modify image quality settings without Pillow installed.")
+        else:
+            val = input("Enter JPEG Quality (1-95, Default: 60): ").strip()
+            if val.isdigit() and 1 <= int(val) <= 95:
+                config["image_quality"] = int(val)
+                save_config(config)
+    elif field == "J":
+        if not check_image_dependencies():
+            print("[-] Cannot modify image width settings without Pillow installed.")
+        else:
+            val = input("Enter Max Image Width in pixels (e.g., 800): ").strip()
+            if val.isdigit() and int(val) > 0:
+                config["max_image_width"] = int(val)
+                save_config(config)
 
 def main_cli_menu():
     while True:
@@ -1194,7 +1264,7 @@ def main_cli_menu():
         toc_mode = config.get("toc_style", "auto").upper()
         days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']}d"
         
-        print("\n=== Feed2ebook Manager v0.4.1 ===")
+        print("\n=== Feed2ebook Manager v0.4.2 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage & Configure Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
@@ -1220,9 +1290,7 @@ def main_cli_menu():
         elif choice == "5":
             choose_export_path_cli(config)
         elif choice == "6":
-            config["include_images"] = not config.get("include_images", True)
-            save_config(config)
-            print(f"[+] Image fetching setting updated to: {'ENABLED' if config['include_images'] else 'DISABLED'}")
+            handle_toggle_images(config)
         elif choice == "7":
             select_toc_style_cli(config)
         elif choice == "8":
@@ -1246,3 +1314,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
