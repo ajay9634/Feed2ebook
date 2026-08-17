@@ -50,10 +50,10 @@ curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install_fee
 
 You can install `feed2ebook` directly from source or via GitHub using `pip`.
 
-Make sure you have **Python 3.8+** and `pip` installed.
+Make sure you have **Python 3.8+** , `pip` and `git` installed.
 
 ```bash
-pip install git+[https://github.com/ajay9634/Feed2ebook.git](https://github.com/ajay9634/Feed2ebook.git)
+pip install git+https://github.com/ajay9634/Feed2ebook.git
 ```
 
 ## Samples
