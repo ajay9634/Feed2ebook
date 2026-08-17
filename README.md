@@ -53,20 +53,16 @@ You can install `feed2ebook` directly from source or via GitHub using `pip`.
 ### Prerequisites
 Make sure you have **Python 3.8+**, `pip`, and `git` installed on your system.
 
-**For Android (Termux) Users Only:**
+#### **For Android (Termux) Users Only:**
 Termux requires system-level C libraries to build one of the dependencies (`lxml`). Before running the pip install command, you must install these required packages inside Termux:
 ```bash
 pkg install python-lxml python-pillow libxml2 libxslt libjpeg-turbo zlib clang make git -y
 ```
 
-**For For Debian/Ubuntu Users:**
+#### **For For Debian/Ubuntu Users:**
 
 ```bash
-sudo apt update
-```
-
-```bash
-sudo apt install python3 python3-pip python3-lxml libxml2-dev libxslt1-dev git libjpeg-dev zlib1g-dev -y
+sudo apt update && sudo apt install python3 python3-pip python3-lxml python3-pil libxml2-dev libxslt1-dev git libjpeg-dev zlib1g-dev build-essential -y
 ```
 
 ### Installation
