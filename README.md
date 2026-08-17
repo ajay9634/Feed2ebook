@@ -61,8 +61,13 @@ pkg install python-lxml libxml2 libxslt clang make git -y
 
 **For For Debian/Ubuntu Users:**
 
-```sudo apt update```
-```sudo apt install python3 python3-pip python3-lxml libxml2-dev libxslt1-dev git libjpeg-dev zlib1g-dev -y```
+```bash
+sudo apt update
+```
+
+```bash
+sudo apt install python3 python3-pip python3-lxml libxml2-dev libxslt1-dev git libjpeg-dev zlib1g-dev -y
+```
 
 ### Installation
 ```bash
