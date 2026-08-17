@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "feed2ebook"
+version = "0.4.2"
+description = "Convert RSS feeds into e-books (EPUB, HTML, Markdown etc)"
+readme = "README.md"
+authors = [{ name = "Ajay9634" }]
+license = { text = "MIT" }
+dependencies = [
+    "requests",
+    "beautifulsoup4",
+    "readability-lxml",
+    "feedparser",
+    "ebooklib",
+    "pillow"
+]
+
+[project.scripts]
+feed2ebook = "Feed2ebook:main"
