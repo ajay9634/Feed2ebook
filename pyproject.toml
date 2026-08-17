@@ -15,7 +15,8 @@ dependencies = [
     "readability-lxml",
     "feedparser",
     "ebooklib",
-    "pillow"
+    "pillow",
+    "lxml
 ]
 
 [project.scripts]
