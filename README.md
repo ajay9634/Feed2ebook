@@ -69,7 +69,15 @@ sudo apt update && sudo apt install python3 python3-pip python3-lxml python3-pil
 ```bash
 pip install git+https://github.com/ajay9634/Feed2ebook.git
 ```
-### Uninstallation
+
+---
+
+## ⚡ Feed2ebook Uninstaller
+
+```bash
+curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/uninstall.sh | bash
+```
+OR
 
 ```pip uninstall feed2ebook -y```
 
