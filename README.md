@@ -56,7 +56,7 @@ Make sure you have **Python 3.8+**, `pip`, and `git` installed on your system.
 **For Android (Termux) Users Only:**
 Termux requires system-level C libraries to build one of the dependencies (`lxml`). Before running the pip install command, you must install these required packages inside Termux:
 ```bash
-pkg install python-lxml libxml2 libxslt clang make git -y
+pkg install python-lxml python-pillow libxml2 libxslt libjpeg-turbo zlib clang make git -y
 ```
 
 **For For Debian/Ubuntu Users:**
