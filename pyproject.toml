@@ -16,7 +16,7 @@ dependencies = [
     "feedparser",
     "ebooklib",
     "pillow",
-    "lxml
+    "lxml"
 ]
 
 [project.scripts]
