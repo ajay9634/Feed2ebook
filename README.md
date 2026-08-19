@@ -46,7 +46,7 @@ curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/install_fee
 ```
 5. After installation, launch the app anytime by typing: `feed2ebook`
 ---
-## Installation using pip
+## ⚡ Feed2ebook Installation using pip
 
 You can install `feed2ebook` directly from source or via GitHub using `pip`.
 
@@ -72,7 +72,7 @@ pip install git+https://github.com/ajay9634/Feed2ebook.git
 
 ---
 
-## ⚡ Feed2ebook Uninstaller
+## 🗑️ Feed2ebook Uninstaller
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/ajay9634/Feed2ebook/main/uninstall.sh | bash
