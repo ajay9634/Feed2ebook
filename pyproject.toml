@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "feed2ebook"
-version = "0.4.2"
+version = "0.4.3"
 description = "Convert RSS feeds into e-books (EPUB, HTML, Markdown etc)"
 readme = "README.md"
 authors = [{ name = "Ajay9634" }]
