@@ -115,6 +115,7 @@ def load_config():
         "export_format": "epub",          # Options: 'epub', 'xml', 'html', 'md', 'all'
         "include_images": True,
         "toc_style": "simple",            # Default: 'simple'
+        "compress_images": True,          # Image compression toggle
         "image_quality": 60,              # Compression quality (1-95)
         "max_image_width": 800            # Maximum width in pixels
     }
@@ -388,8 +389,8 @@ def extract_full_html_readability(url, include_images=True, entry=None):
             
     return doc.title(), str(soup)
 
-def process_and_embed_images(html_content, book, base_url="", quality=60, max_width=800):
-    """Downloads images in HTML, resizes/compresses them, and embeds inside EPUB."""
+def process_and_embed_images(html_content, book, base_url="", quality=60, max_width=800, compress_images=True):
+    """Downloads images in HTML, resizes/compresses them if enabled, and embeds inside EPUB."""
     try:
         from PIL import Image
     except ImportError:
@@ -438,22 +439,27 @@ def process_and_embed_images(html_content, book, base_url="", quality=60, max_wi
             if img_res.status_code == 200:
                 raw_bytes = img_res.content
                 
-                try:
-                    with Image.open(io.BytesIO(raw_bytes)) as pil_img:
-                        if pil_img.mode in ("RGBA", "P"):
-                            pil_img = pil_img.convert("RGB")
-                        
-                        if pil_img.width > max_width:
-                            w_percent = max_width / float(pil_img.width)
-                            h_size = int(float(pil_img.height) * float(w_percent))
-                            pil_img = pil_img.resize((max_width, h_size), Image.Resampling.LANCZOS)
+                if compress_images:
+                    try:
+                        with Image.open(io.BytesIO(raw_bytes)) as pil_img:
+                            if pil_img.mode in ("RGBA", "P"):
+                                pil_img = pil_img.convert("RGB")
+                            
+                            if pil_img.width > max_width:
+                                w_percent = max_width / float(pil_img.width)
+                                h_size = int(float(pil_img.height) * float(w_percent))
+                                pil_img = pil_img.resize((max_width, h_size), Image.Resampling.LANCZOS)
 
-                        out_buffer = io.BytesIO()
-                        pil_img.save(out_buffer, format="JPEG", quality=quality, optimize=True)
-                        processed_bytes = out_buffer.getvalue()
+                            out_buffer = io.BytesIO()
+                            pil_img.save(out_buffer, format="JPEG", quality=quality, optimize=True)
+                            processed_bytes = out_buffer.getvalue()
+                            ext = "jpg"
+                            media_type = "image/jpeg"
+                    except Exception:
+                        processed_bytes = raw_bytes
                         ext = "jpg"
                         media_type = "image/jpeg"
-                except Exception:
+                else:
                     processed_bytes = raw_bytes
                     ext = "jpg"
                     media_type = "image/jpeg"
@@ -539,7 +545,7 @@ def generate_toc_html(grouped_articles, is_epub=False, mode="auto"):
     toc_html += "</div><hr style='margin: 20px 0;'/>"
     return toc_html
 
-def build_epub(articles_data, output_dir, base_filename, include_images=True, toc_style="auto", quality=60, max_width=800):
+def build_epub(articles_data, output_dir, base_filename, include_images=True, toc_style="auto", quality=60, max_width=800, compress_images=True):
     print(f"[+] Building EPUB file with {len(articles_data)} article(s) (TOC Style: {toc_style.upper()})...")
     try:
         output_dir = ensure_directory_exists(output_dir)
@@ -573,7 +579,7 @@ def build_epub(articles_data, output_dir, base_filename, include_images=True, to
             for item in items:
                 html = item['html_content']
                 if include_images:
-                    html = process_and_embed_images(html, book, base_url=item['url'], quality=quality, max_width=max_width)
+                    html = process_and_embed_images(html, book, base_url=item['url'], quality=quality, max_width=max_width, compress_images=compress_images)
 
                 c = epub.EpubHtml(title=item['title'], file_name=item['epub_filename'], lang='en')
                 c.content = f"""
@@ -825,12 +831,13 @@ def process_feeds():
     base_title = f"Feed2ebook_Digest_{timestamp}"
     fmt = config["export_format"].lower()
     inc_img = config.get("include_images", True)
+    compress_img = config.get("compress_images", True)
     toc_style = config.get("toc_style", "auto")
     quality = config.get("image_quality", 60)
     max_width = config.get("max_image_width", 800)
 
     if fmt == "epub":
-        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style, quality=quality, max_width=max_width)
+        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style, quality=quality, max_width=max_width, compress_images=compress_img)
     elif fmt == "html":
         build_html(all_collected_articles, config["download_path"], base_title, toc_style=toc_style)
     elif fmt == "md":
@@ -839,7 +846,7 @@ def process_feeds():
         xml_filepath = os.path.join(config["download_path"], f"{sanitize_filename(base_title)}.xml")
         export_rss_xml(all_collected_articles, xml_filepath, base_title)
     elif fmt == "all":
-        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style, quality=quality, max_width=max_width)
+        build_epub(all_collected_articles, config["download_path"], base_title, include_images=inc_img, toc_style=toc_style, quality=quality, max_width=max_width, compress_images=compress_img)
         build_html(all_collected_articles, config["download_path"], base_title, toc_style=toc_style)
         build_markdown(all_collected_articles, config["download_path"], base_title, toc_style=toc_style)
         xml_filepath = os.path.join(config["download_path"], f"{sanitize_filename(base_title)}.xml")
@@ -857,7 +864,7 @@ def init_colors():
     curses.init_pair(5, curses.COLOR_RED, -1)      
     curses.init_pair(6, curses.COLOR_MAGENTA, -1)  
 
-def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.4.2 ==="):
+def draw_tui_menu(stdscr, selected_row, options, title="=== Feed2ebook Manager v0.4.3 ==="):
     stdscr.clear()
     h, w = stdscr.getmaxyx()
     
@@ -911,6 +918,14 @@ def handle_toggle_images(config):
     config["include_images"] = target_state
     save_config(config)
     print(f"\n[+] Image fetching option is now: {'ENABLED' if target_state else 'DISABLED'}")
+    return True
+
+def handle_toggle_image_compression(config):
+    """Toggles image compression yes/no."""
+    target_state = not config.get("compress_images", True)
+    config["compress_images"] = target_state
+    save_config(config)
+    print(f"\n[+] Image compression is now: {'ENABLED' if target_state else 'DISABLED'}")
     return True
 
 def curses_tui_loop(stdscr):
@@ -979,7 +994,7 @@ def curses_tui_loop(stdscr):
             return "cli"
 
 def configure_single_feed_cli(feeds, idx, global_config):
-    """Submenu to manage individual settings (limits, max_days, include_images) per feed."""
+    """Submenu to manage individual settings per feed."""
     feed = feeds[idx]
     url = get_feed_url(feed)
 
@@ -1177,7 +1192,11 @@ def export_opml_cli():
 
 def settings_cli():
     config = load_config()
-    img_status = "ENABLED" if config.get("include_images", True) else "DISABLED"
+    include_img = config.get("include_images", True)
+    compress_img = config.get("compress_images", True)
+    
+    img_status = "ENABLED" if include_img else "DISABLED"
+    compress_status = "ENABLED" if compress_img else "DISABLED"
     toc_mode = config.get("toc_style", "auto").upper()
     days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']} days"
     per_day_str = "Unlimited" if not config.get("max_articles_per_day") else f"{config['max_articles_per_day']} articles/day"
@@ -1185,41 +1204,62 @@ def settings_cli():
     quality_str = f"{config.get('image_quality', 60)}%"
     max_width_str = f"{config.get('max_image_width', 800)}px"
     
+    options = {}
     print(f"\nCurrent Global Settings:")
     print(f"A. Max Article Age (Days)    : {days_str}")
+    options["A"] = "max_days"
     print(f"B. Max Articles Per Day      : {per_day_str}")
+    options["B"] = "max_per_day"
     print(f"C. Total Articles Limit      : {total_str}")
+    options["C"] = "total_limit"
     print(f"D. Export Format ({', '.join(VALID_FORMATS)}): {config['export_format']}")
+    options["D"] = "export_format"
     print(f"E. Download Path             : {config['download_path']}")
+    options["E"] = "download_path"
     print(f"F. Include Article Images    : {img_status}")
+    options["F"] = "include_images"
     print(f"G. Choose Output Path (Presets Menu)")
+    options["G"] = "output_path_presets"
     print(f"H. Table of Contents Mode    : {toc_mode}")
-    print(f"I. Image Compression Quality : {quality_str}")
-    print(f"J. Max Image Width           : {max_width_str}")
+    options["H"] = "toc_style"
     
-    field = input("Choose setting to modify (A-J) or press Enter to return: ").strip().upper()
-    if field == "A":
+    # Dynamic display according to image toggles
+    if include_img:
+        print(f"I. Image Compression         : {compress_status}")
+        options["I"] = "compress_images"
+        if compress_img:
+            print(f"J. Image Quality             : {quality_str}")
+            options["J"] = "image_quality"
+            print(f"K. Max Image Width           : {max_width_str}")
+            options["K"] = "max_image_width"
+
+    valid_choices = list(options.keys())
+    prompt_str = f"Choose setting to modify ({valid_choices[0]}-{valid_choices[-1]}) or press Enter to return: " if valid_choices else "Press Enter to return: "
+    field = input(prompt_str).strip().upper()
+    
+    action = options.get(field)
+    if action == "max_days":
         val = input("Enter max days (type 0 or 'unlimited' for Unlimited): ").strip().lower()
         if val in ["0", "unlimited", "u"]:
             config["max_days"] = 0
         elif val.isdigit():
             config["max_days"] = int(val)
         save_config(config)
-    elif field == "B":
+    elif action == "max_per_day":
         val = input("Enter max articles per day (type 0 or 'unlimited' for Unlimited): ").strip().lower()
         if val in ["0", "unlimited", "u"]:
             config["max_articles_per_day"] = 0
         elif val.isdigit():
             config["max_articles_per_day"] = int(val)
         save_config(config)
-    elif field == "C":
+    elif action == "total_limit":
         val = input("Enter total articles limit per feed (type 0 or 'unlimited' for Unlimited): ").strip().lower()
         if val in ["0", "unlimited", "u"]:
             config["total_articles_limit"] = 0
         elif val.isdigit():
             config["total_articles_limit"] = int(val)
         save_config(config)
-    elif field == "D":
+    elif action == "export_format":
         print(f"Available formats: {', '.join(VALID_FORMATS)}")
         fmt = input("Enter format choice: ").strip().lower()
         if fmt in VALID_FORMATS:
@@ -1229,18 +1269,20 @@ def settings_cli():
             save_config(config)
         else:
             print("[-] Invalid format option.")
-    elif field == "E":
+    elif action == "download_path":
         new_path = input("Enter new path: ").strip()
         if new_path:
             config["download_path"] = new_path
             save_config(config)
-    elif field == "F":
+    elif action == "include_images":
         handle_toggle_images(config)
-    elif field == "G":
+    elif action == "output_path_presets":
         choose_export_path_cli(config)
-    elif field == "H":
+    elif action == "toc_style":
         select_toc_style_cli(config)
-    elif field == "I":
+    elif action == "compress_images":
+        handle_toggle_image_compression(config)
+    elif action == "image_quality":
         if not check_image_dependencies():
             print("[-] Cannot modify image quality settings without Pillow installed.")
         else:
@@ -1248,7 +1290,7 @@ def settings_cli():
             if val.isdigit() and 1 <= int(val) <= 95:
                 config["image_quality"] = int(val)
                 save_config(config)
-    elif field == "J":
+    elif action == "max_image_width":
         if not check_image_dependencies():
             print("[-] Cannot modify image width settings without Pillow installed.")
         else:
@@ -1264,7 +1306,7 @@ def main_cli_menu():
         toc_mode = config.get("toc_style", "auto").upper()
         days_str = "Unlimited" if not config.get("max_days") else f"{config['max_days']}d"
         
-        print("\n=== Feed2ebook Manager v0.4.2 ===")
+        print("\n=== Feed2ebook Manager v0.4.3 ===")
         print(f"1. Run Downloader (Format: {config['export_format'].upper()})")
         print(f"2. Manage & Configure Feeds ({len(load_feeds())} currently saved)")
         print("3. Import OPML File")
